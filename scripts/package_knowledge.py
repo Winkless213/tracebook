@@ -3,8 +3,12 @@ import argparse
 import hashlib
 import io
 import json
+import sys
 import tarfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from devrag.knowledge_status import DOCUMENT_STAGES, stage_ready
 
 
 def package(root, output):
@@ -14,21 +18,45 @@ def package(root, output):
     documents = {'catalog.json': catalog_bytes, 'INDEX.md': (root / 'INDEX.md').read_bytes()}
     ready = 0
     for row in catalog['projects']:
-        if row['status'] != 'ready':
+        if not row['documents']:
             continue
         project = (root / row['name']).resolve()
         if not project.is_relative_to(root) or project == root:
             raise ValueError('Invalid project path')
-        provenance = json.loads((project / 'provenance.json').read_text(encoding='utf-8'))
-        code = (project / 'CODEBASE.md').read_bytes()
-        if provenance['commit'] != row['commit'] or hashlib.sha256(code).hexdigest() != provenance['codebase_sha256']:
-            raise ValueError('Knowledge commit or content differs from provenance')
-        for name in [*row['documents'], 'provenance.json']:
-            if name not in {'CODEBASE.md', 'MODULES.md', 'provenance.json'}:
+        if not set(row['documents']) <= DOCUMENT_STAGES.keys():
+            raise ValueError('Unpublished document requested')
+        payloads, checksums = {}, {}
+        if any(DOCUMENT_STAGES[name] == 'code' for name in row['documents']):
+            payloads['provenance.json'] = (project / 'provenance.json').read_bytes()
+            proof = json.loads(payloads['provenance.json'])
+            if row['status'] != 'ready' or proof['commit'] != row['commit'] or 'CODEBASE.md' not in row['documents']:
+                raise ValueError('Knowledge commit or content differs from provenance')
+            checksums['CODEBASE.md'] = proof['codebase_sha256']
+            if proof.get('modules_sha256'):
+                checksums['MODULES.md'] = proof['modules_sha256']
+            ready += 1
+        if 'SESSION-TOPICS.md' in row['documents']:
+            if row.get('topics_status') != 'ready' or not stage_ready(row, project, 'topics'):
+                raise ValueError('Topic content or sources differ from provenance')
+            payloads['session-topics.json'] = (project / 'session-topics.json').read_bytes()
+            checksums['SESSION-TOPICS.md'] = json.loads(payloads['session-topics.json'])['markdown_sha256']
+        if 'SESSIONS.md' in row['documents']:
+            if row.get('history_status') not in {'ready', 'reviewed'} or not stage_ready(row, project, 'history'):
+                raise ValueError('History content or sources differ from provenance')
+            payloads['history-provenance.json'] = (project / 'history-provenance.json').read_bytes()
+            proof = json.loads(payloads['history-provenance.json'])
+            checksums.update({'SESSIONS.md': proof['sessions_sha256'], 'SESSION-TOPICS.md': proof['topics_sha256']})
+            if 'SESSION-TOPICS.md' not in row['documents']:
                 raise ValueError('Unpublished document requested')
-            documents[row['name'] + '/' + name] = (project / name).read_bytes()
-        ready += 1
+        for name in row['documents']:
+            payloads[name] = (project / name).read_bytes()
+        for name, checksum in checksums.items():
+            if hashlib.sha256(payloads[name]).hexdigest() != checksum:
+                raise ValueError('Knowledge content differs from provenance')
+        documents.update({row['name'] + '/' + name: data for name, data in payloads.items()})
     manifest = {'projects': len(catalog['projects']), 'ready': ready,
+                'topics_ready': sum(row.get('topics_status') == 'ready' for row in catalog['projects']),
+                'history_ready': sum(row.get('history_status') == 'ready' for row in catalog['projects']),
                 'files': {name: hashlib.sha256(data).hexdigest() for name, data in documents.items()}}
     if (root / 'catalog.json').read_bytes() != catalog_bytes:
         raise RuntimeError('Catalog changed while packaging; retry from a fresh snapshot')
@@ -44,7 +72,9 @@ def package(root, output):
             if hashlib.sha256(archive.extractfile(name).read()).hexdigest() != checksum:
                 raise ValueError('Archive integrity check failed')
     return {'path': str(output), 'sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
-            'projects': manifest['projects'], 'ready': ready}
+            'manifest_sha256': hashlib.sha256(documents['knowledge-manifest.json']).hexdigest(),
+            'projects': manifest['projects'], 'ready': ready,
+            'topics_ready': manifest['topics_ready'], 'history_ready': manifest['history_ready']}
 
 
 if __name__ == '__main__':
