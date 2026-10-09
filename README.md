@@ -1,8 +1,29 @@
 # Tracebook · 开发者项目知识助手
 
-接入 Git 项目快照和选定的 Codex / Claude 开发会话，检索代码、文档与历史经验，回答保留来源、原文摘录及适用范围。第一版单人使用；数据与模型配置均独立，不影响外贸 RAG。
+将 GitHub 项目代码、文档与开发会话整理成有出处的 Markdown，供 Codex / Claude 按任务读取。默认网页只显示项目覆盖和可用知识；旧问答与诊断保留在 `?view=diagnostics`。数据与服务独立，不影响既有 another app。
 
-## 本轮范围和完成门槛
+## 项目知识主路径
+
+GitHub 登录与默认分支检出 → [Repomix 1.18.1](https://github.com/yamadashy/repomix) 整理源码和检查秘密 → 现有强模型分批归纳 → `INDEX.md` / `CODEBASE.md` / `MODULES.md` → 开发助手按仓库读取。
+
+复用已核验的 [deja-vu v0.21.7](https://github.com/vshulcz/deja-vu) 解析与脱敏会话。仓库地址、历史目录关联、会话主题相关性是不同证据，不能只凭工作目录把本机迁移或其他项目讨论当作项目开发经验。`SESSION-INDEX.md` 和 `history/*.md` 是来源索引与脱敏记录，不表示全部经过模型提炼。
+
+```powershell
+npm --prefix scripts/knowledge ci --ignore-scripts --no-audit --no-fund
+python -m scripts.sync_github_knowledge --owner <GitHub账号> --state <独立同步目录> --output <知识目录> --proxy http://127.0.0.1:7897
+```
+
+Git 凭据由本机 Credential Manager 提供，模型沿用 `DISTILL_*` 环境变量。`--watch` 在每轮结束后每5分钟重新核对GitHub；同一输入复用缓存。上游连接失败停止本轮新增请求；同一失败提交不在轮询中反复付费，排障后以 `--retry-failed` 明确续跑。默认分支浅检出不含全部Git历史或LFS大文件；本地副本存在改动或身份不符时停止，绝不覆盖开发工作树。
+
+```powershell
+python -m scripts.export_project_history --catalog <同步目录>/github-checkouts.json --deja <已核验deja.exe> --state <独立会话状态目录> --output <知识目录> --inventory-only
+```
+
+去掉 `--inventory-only` 后导出已关联会话；可用 `--project <仓库名>` 选定项目。原始记录只读；超过现有采集器大小门槛或来源校验失败的文件保留为失败，不能算已接入。代码知识的来源校验只保证引用路径存在，不保证每个模型判断正确，改代码前仍须打开当前源码并运行相关测试。
+
+API `GET /api/developer-knowledge` 返回真实发布目录；已完成项目的 `CODEBASE.md` 和 `MODULES.md` 可在认证后下载。目录由 `DEVELOPER_KNOWLEDGE_DIR` 指定，默认 `DATA_DIR/developer-knowledge`。不发布原始私有源码、会话全文或模型生成缓存。
+
+## 保留的诊断能力
 
 - 导入本机 Git 已提交文本，经允许目录、文件类型、密钥检查后打包；服务不接受任意服务器路径、不自动克隆或执行代码。
 - 快照按项目与分支隔离。更新原子完成；历史问答固定原快照，当前搜索只用选中版本。旧问答显示版本变化提示。

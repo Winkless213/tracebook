@@ -58,3 +58,26 @@ def test_oversized_and_invalid_path_rejected(client):
     data = bundle({'README.md': 'text'}).model_dump(by_alias=True)
     data['files'][0]['path'] = '../.env'
     assert browser.post('/api/import', json=data).status_code == 422
+
+
+def test_developer_knowledge_download_requires_login_and_published_document(client, tmp_path):
+    import json
+
+    browser, _ = client
+    root = tmp_path / 'developer-knowledge'
+    project = root / 'example'
+    project.mkdir(parents=True)
+    (project / 'CODEBASE.md').write_text('# 开发入口\n查看 app.py', encoding='utf-8', newline='\n')
+    (project / 'provenance.json').write_text('{}', encoding='utf-8')
+    (root / 'catalog.json').write_text(json.dumps({'projects': [
+        {'name': 'example', 'status': 'ready', 'documents': ['CODEBASE.md']},
+    ]}), encoding='utf-8')
+    endpoint = '/api/developer-knowledge/example/documents/'
+    assert browser.get(endpoint + 'CODEBASE.md').status_code == 401
+    login(browser)
+    assert browser.get('/api/developer-knowledge').json()['ready'] == 1
+    download = browser.get(endpoint + 'CODEBASE.md')
+    assert download.status_code == 200
+    assert download.text == '# 开发入口\n查看 app.py'
+    assert 'attachment' in download.headers['content-disposition']
+    assert browser.get(endpoint + 'provenance.json').status_code == 404

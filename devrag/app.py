@@ -11,6 +11,7 @@ from filelock import FileLock
 from pydantic import Field
 
 from .auth import Auth
+from .developer_knowledge import KnowledgeFiles
 from .distill import Distiller, HistoryWorker
 from .history import DistillRequest, HistoryProject, HistoryStore, SyncBatch
 from .llm import LLM
@@ -63,6 +64,7 @@ def create_app(data_dir=None, model=None, start_worker=True, distill_model=None)
     worker, stop = Worker(store, retriever, llm), threading.Event()
     history, distiller = HistoryStore(store), distill_model or Distiller()
     history_worker = HistoryWorker(history, distiller)
+    knowledge_files = KnowledgeFiles(os.getenv('DEVELOPER_KNOWLEDGE_DIR', str(root / 'developer-knowledge')))
 
     @asynccontextmanager
     async def lifespan(app):
@@ -143,6 +145,14 @@ def create_app(data_dir=None, model=None, start_worker=True, distill_model=None)
     @app.get('/api/projects')
     def projects():
         return store.projects()
+
+    @app.get('/api/developer-knowledge')
+    def developer_knowledge():
+        return knowledge_files.catalog()
+
+    @app.get('/api/developer-knowledge/{project}/documents/{name}')
+    def developer_document(project: str, name: str):
+        return FileResponse(knowledge_files.document(project, name), media_type='text/markdown; charset=utf-8', filename=name)
 
     @app.get('/api/projects/{identifier}/snapshots')
     def snapshots(identifier: str):

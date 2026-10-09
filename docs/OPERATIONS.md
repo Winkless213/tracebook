@@ -51,6 +51,10 @@ chown -R 10001:10001 /opt/devrag/restore-<timestamp>
 
 ## 发布门槛
 
+- 项目知识单独发布到 `/opt/devrag/data/developer-knowledge`，只包含 catalog、入口、已完成 Markdown 与来源清单；生成缓存、原始检出和会话全文不进入服务包。
+- 发布后认证读取 `/api/developer-knowledge`，核对项目数量、完成状态和 Markdown 哈希，再用真实浏览器核验默认概览。旧问答评测不能证明项目知识主路径完成。
+- 批量模型出现上游 HTTP 5xx、连接中断或流内错误时，本轮停止新增付费请求，保留完整批次缓存；未完成项目仍是未完成，不能因为进程结束就标记可用。
+
 - Git和包身份一致，独立配置与数据路径明确。
 - 候选API、认证、导入检索通过，正式镜像/进程release一致。
 - 旧RAG容器身份与health前后相同。

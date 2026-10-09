@@ -43,7 +43,9 @@ async function click(label) {
 }
 const props = { project: { id: 'p1', name: 'Tracebook' }, onUnauthorized: () => {}, online: true };
 
-test('工作台入口可以进入会话知识并返回项目问答', async (t) => {
+test('诊断入口可以进入会话知识并返回项目问答', async (t) => {
+  browser.happyDOM.setURL('http://localhost/?view=diagnostics');
+  t.after(() => browser.happyDOM.setURL('http://localhost/'));
   t.mock.method(globalThis, 'fetch', async (url) => {
     if (url === '/api/session') return json({ authenticated: true });
     if (url === '/api/info') return json({ provider_configured: false });

@@ -1,6 +1,8 @@
 # Tracebook 项目导航
 
-用途：在指定项目、分支和 Git 快照里查询代码与工程记录，保留可复查的文件、行号和原文。代码检索和 RAG 问答已经实现；自主改代码、执行工具与开发监控不在本项目范围内。
+用途：为开发助手生成可追溯的项目 Markdown。主入口和运行命令见 [README](../README.md#项目知识主路径)：`sync_github_knowledge.py` 组合 GitHub/Git、Repomix 与 `build_knowledge.py`；`export_project_history.py` 复用 deja-vu 生成会话来源索引和脱敏 Markdown。默认网页只读发布结果，自主修改项目代码不在此服务范围内。
+
+下面保留既有诊断接口的设计与边界，不作为新知识主路径的完成证明。
 
 ## 从仓库到可查询资料
 

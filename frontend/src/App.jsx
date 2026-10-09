@@ -11,6 +11,7 @@ import Evidence from './components/Evidence.jsx';
 import ImportDialog from './components/ImportDialog.jsx';
 import KnowledgeMap from './components/KnowledgeMap.jsx';
 import HistoryKnowledge from './components/HistoryKnowledge.jsx';
+import ProjectKnowledge from './components/ProjectKnowledge.jsx';
 
 function WorkspaceHeader({ project, snapshot, info, onLogout, logoutBusy, historyOpen }) {
   const conversationOnly = (snapshot?.origin || project?.origin) === 'conversation';
@@ -152,5 +153,6 @@ export default function App() {
   const logout = useCallback(async () => { await api('/logout', { method: 'POST', body: {} }); setDraft(''); session.setAuthenticated(false); }, [session.setAuthenticated]);
   if (session.authenticated === null) return <main className="boot-page"><Brand /><div className="card boot-card">{session.error ? <><Notice>{session.error}</Notice><button className="button primary" disabled={session.checking} onClick={() => session.check()}>{session.checking ? <Spinner label="连接中" /> : '重新连接工作台'}</button></> : <Spinner label="连接你的工作空间" />}</div></main>;
   if (!session.authenticated) return <Login info={session.info} onSuccess={() => { session.setAuthenticated(true); session.check(); }} />;
-  return <Workspace info={session.info} onUnauthorized={session.expire} onLogout={logout} draft={draft} setDraft={setDraft} />;
+  if (new URLSearchParams(window.location.search).get('view') === 'diagnostics') return <Workspace info={session.info} onUnauthorized={session.expire} onLogout={logout} draft={draft} setDraft={setDraft} />;
+  return <ProjectKnowledge onUnauthorized={session.expire} onLogout={logout} />;
 }

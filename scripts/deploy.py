@@ -5,6 +5,7 @@ import http.cookiejar
 import json
 import os
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -33,7 +34,7 @@ def identity(name):
             'ports': item['HostConfig']['PortBindings'], 'mounts': [{key: mount.get(key) for key in ['Source', 'Destination']} for mount in item['Mounts']]}
 
 
-def smoke(port, release, password, ingest=False):
+def smoke(port, release, password, ingest=False, verify_knowledge=True):
     root = f'http://127.0.0.1:{port}'
     client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
@@ -53,6 +54,11 @@ def smoke(port, release, password, ingest=False):
     request('/api/login', {'password': password})
     assert request('/api/session')['authenticated']
     request('/api/projects')
+    knowledge = request('/api/developer-knowledge') if verify_knowledge else {'projects': [], 'ready': 0}
+    for project in knowledge['projects']:
+        if project['status'] == 'ready':
+            with client.open(root + '/api/developer-knowledge/' + project['name'] + '/documents/CODEBASE.md', timeout=10) as document:
+                assert project['commit'].encode() in document.read()
     with client.open(root, timeout=5) as response:
         page = response.read().decode()
         assert '<div id="root"' in page
@@ -79,7 +85,8 @@ def smoke(port, release, password, ingest=False):
         assert detail['total'] == 1 and detail['records'][0]['text'] == text
         history_sources = request('/api/search', {'project_id': conversation['id'], 'question': 'deployment_probe'})['sources']
         assert history_sources[0]['origin'] == 'conversation'
-    return {'health': 'ok', 'auth': 'ok', 'frontend_assets': 'ok', 'import_search': 'ok' if ingest else 'candidate-only'}
+    return {'health': 'ok', 'auth': 'ok', 'frontend_assets': 'ok', 'import_search': 'ok' if ingest else 'candidate-only',
+            'knowledge_projects': len(knowledge['projects']), 'knowledge_ready': knowledge['ready']}
 
 
 def start(name, image, config, data, port):
@@ -122,7 +129,11 @@ def deploy(args):
     candidate = name + '-candidate-' + revision[:12]
     if inspect(candidate):
         raise ValueError('候选容器已存在，请先检查上次部署状态')
-    start(candidate, image, config, root / 'candidate-data' / revision, args.candidate_port)
+    candidate_data = root / 'candidate-data' / revision
+    knowledge = root / 'data/developer-knowledge'
+    if knowledge.is_dir():
+        shutil.copytree(knowledge, candidate_data / 'developer-knowledge')
+    start(candidate, image, config, candidate_data, args.candidate_port)
     report = {'revision': revision, 'protected_before': protected}
     try:
         report['candidate'] = smoke(args.candidate_port, revision, env['APP_PASSWORD'], ingest=True)
@@ -139,6 +150,8 @@ def deploy(args):
     try:
         start(name, image, config, root / 'data', args.port)
         report['live'] = smoke(args.port, revision, env['APP_PASSWORD'])
+        assert report['live']['knowledge_projects'] == report['candidate']['knowledge_projects']
+        assert report['live']['knowledge_ready'] == report['candidate']['knowledge_ready']
         report['identity'] = identity(name)
         assert report['identity']['release'] == revision
         assert report['identity']['image'] == report['candidate_identity']['image']
@@ -150,7 +163,7 @@ def deploy(args):
         if old:
             run('docker', 'rename', backup_name, name)
             run('docker', 'start', name)
-            smoke(args.port, old['release'], env['APP_PASSWORD'])
+            smoke(args.port, old['release'], env['APP_PASSWORD'], verify_knowledge=False)
         raise
     report['protected_unchanged'] = True
     (release_path / 'deployment.json').write_text(json.dumps(report, indent=2), encoding='utf-8')

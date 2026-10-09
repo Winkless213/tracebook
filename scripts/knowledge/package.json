@@ -1,0 +1,6 @@
+{
+  "name": "tracebook-knowledge-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": { "repomix": "1.18.1" }
+}
