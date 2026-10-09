@@ -1,0 +1,15 @@
+{
+  "url": "http://127.0.0.1:3415",
+  "deja": "C:/tools/deja-v0.21.7/deja.exe",
+  "state_dir": "C:/tracebook/connector-state",
+  "sources": [
+    {
+      "harness": "claude",
+      "path": "C:/selected/project-session.jsonl",
+      "native_id": "replace-with-native-session-id",
+      "title": "已核实项目归属的开发会话",
+      "project_name": "my-project-history",
+      "auto_distill": false
+    }
+  ]
+}

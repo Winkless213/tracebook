@@ -2,7 +2,7 @@ import React from 'react';
 import { formatDate, shortCommit } from '../lib/domain.js';
 import { Brand, Icon, Spinner, StatusBadge } from './Ui.jsx';
 
-export default function Sidebar({ projects, project, snapshots, snapshotId, history, questionId, loading, disabled, onProject, onSnapshot, onQuestion, onImport, onRefresh, onNew, mobileOpen, setMobileOpen }) {
+export default function Sidebar({ projects, project, snapshots, snapshotId, history, questionId, loading, disabled, onProject, onSnapshot, onQuestion, onImport, onRefresh, onNew, mobileOpen, setMobileOpen, historyOpen, onHistory }) {
   const names = [...new Set(projects.map((item) => item.name))];
   const branches = projects.filter((item) => item.name === project?.name);
   return <aside className={`sidebar ${mobileOpen ? 'sidebar-open' : ''}`}>
@@ -23,9 +23,10 @@ export default function Sidebar({ projects, project, snapshots, snapshotId, hist
         <label htmlFor="snapshot-select">快照版本</label>
         <select id="snapshot-select" value={snapshotId || ''} onChange={(event) => onSnapshot(event.target.value)} disabled={disabled || loading || !snapshots.length}>
           {!snapshots.length && <option value="">{loading ? '加载版本…' : '暂无快照'}</option>}
-          {snapshots.map((item) => <option key={item.id} value={item.id}>{shortCommit(item.commit)}{item.active ? ' · 最新快照' : ` · ${formatDate(item.created_at, true)}`}</option>)}
+          {snapshots.map((item) => <option key={item.id} value={item.id}>{item.origin === 'conversation' ? '会话归档 · 无 Git 快照' : `${shortCommit(item.commit)}${item.active ? ' · 最新快照' : ` · ${formatDate(item.created_at, true)}`}`}</option>)}
         </select>
         <button className="button import-sidebar" onClick={onImport}><Icon name="upload" size={16} />导入项目快照</button>
+        <button className="button conversation-sidebar" aria-label="打开会话知识" aria-pressed={historyOpen} onClick={onHistory} disabled={!project || disabled}><Icon name="clock" size={16} />会话知识<Icon name="chevron" size={13} /></button>
       </div>
       <section className="history-section" aria-label="问答历史">
         <div className="rail-section-title"><span>问答历史 <span className="history-count">{history.length}</span></span><div className="history-tools"><button className="icon-button" aria-label="刷新问答历史" onClick={onRefresh} disabled={loading || !project}><Icon name="refresh" size={14} /></button><button className="icon-button" aria-label="新建提问" onClick={onNew}><Icon name="plus" size={17} /></button></div></div>

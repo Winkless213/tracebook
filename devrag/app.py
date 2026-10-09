@@ -4,13 +4,15 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from filelock import FileLock
 from pydantic import Field
 
 from .auth import Auth
+from .distill import Distiller, HistoryWorker
+from .history import DistillRequest, HistoryProject, HistoryStore, SyncBatch
 from .llm import LLM
 from .models import Bundle, Question, Search, Strict
 from .retrieval import Retriever
@@ -53,30 +55,35 @@ class BodyLimit:
         await self.app(scope, replay, send)
 
 
-def create_app(data_dir=None, model=None, start_worker=True):
+def create_app(data_dir=None, model=None, start_worker=True, distill_model=None):
     root = Path(data_dir or os.getenv('DATA_DIR', './data'))
     root.mkdir(parents=True, exist_ok=True)
     store = Store(root / 'knowledge.sqlite')
     retriever, auth, llm = Retriever(store), Auth(), model or LLM()
     worker, stop = Worker(store, retriever, llm), threading.Event()
+    history, distiller = HistoryStore(store), distill_model or Distiller()
+    history_worker = HistoryWorker(history, distiller)
 
     @asynccontextmanager
     async def lifespan(app):
         lock = FileLock(root / 'worker.lock')
         lock.acquire(timeout=0)
         thread = threading.Thread(target=worker.run, args=(stop,), daemon=True)
+        history_thread = threading.Thread(target=history_worker.run, args=(stop,), daemon=True)
         if start_worker:
             thread.start()
+            history_thread.start()
         try:
             yield
         finally:
             stop.set()
             if start_worker:
-                await asyncio.to_thread(thread.join, 155)
+                await asyncio.gather(asyncio.to_thread(thread.join, 155), asyncio.to_thread(history_thread.join, 155))
             lock.release()
 
     app = FastAPI(title='Tracebook', lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.store, app.state.worker = store, worker
+    app.state.history, app.state.history_worker = history, history_worker
     app.add_middleware(BodyLimit)
 
     @app.middleware('http')
@@ -110,7 +117,8 @@ def create_app(data_dir=None, model=None, start_worker=True):
 
     @app.get('/api/info')
     def info():
-        return {'name': 'Tracebook', 'release': os.getenv('APP_RELEASE', 'dev'), 'provider_configured': llm.configured, 'primary_model': llm.primary, 'fallback_model': llm.fallback}
+        return {'name': 'Tracebook', 'release': os.getenv('APP_RELEASE', 'dev'), 'provider_configured': llm.configured, 'primary_model': llm.primary, 'fallback_model': llm.fallback,
+                'distill_configured': distiller.configured, 'distill_model': distiller.model}
 
     @app.get('/api/session')
     def session(request: Request):
@@ -153,6 +161,48 @@ def create_app(data_dir=None, model=None, start_worker=True):
     def samples():
         return SAMPLES
 
+    @app.get('/api/history/sessions')
+    def history_sessions(project_id: str):
+        return history.sessions(project_id)
+
+    @app.post('/api/history/projects')
+    def history_project(body: HistoryProject):
+        return history.create_project(body.name)
+
+    @app.get('/api/history/sessions/{identifier}')
+    def history_session(identifier: str, offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):
+        return history.session(identifier, offset, limit)
+
+    @app.get('/api/history/records/{identifier}')
+    def history_record(identifier: str):
+        return history.record(identifier)
+
+    @app.post('/api/history/sync')
+    def history_sync(body: SyncBatch):
+        if body.auto_distill and not distiller.configured:
+            raise HTTPException(503, '服务器尚未配置提炼模型，可关闭自动提炼后同步原文')
+        return history.sync(body)
+
+    @app.post('/api/history/sessions/{identifier}/distill')
+    def history_distill(identifier: str, body: DistillRequest):
+        if not distiller.configured:
+            raise HTTPException(503, '服务器尚未配置提炼模型；原文仍可检索')
+        return history.enqueue(identifier, body.record_ids)
+
+    @app.get('/api/history/jobs/{identifier}')
+    def history_job(identifier: str):
+        return history.job(identifier)
+
+    @app.post('/api/history/jobs/{identifier}/retry')
+    def history_retry(identifier: str):
+        if not distiller.configured:
+            raise HTTPException(503, '服务器尚未配置提炼模型')
+        return history.action(identifier, 'retry')
+
+    @app.post('/api/history/jobs/{identifier}/cancel')
+    def history_cancel(identifier: str):
+        return history.action(identifier, 'cancel')
+
     @app.post('/api/search')
     def search(body: Search):
         return retriever.search(body.project_id, body.question, body.snapshot_id, body.top_k)
@@ -189,7 +239,8 @@ def create_app(data_dir=None, model=None, start_worker=True):
         if question['status'] != 'completed':
             raise HTTPException(409, '尚无可导出结果')
         result = question['result']
-        lines = ['# ' + question['question'], '', '提交：' + question['commit'], '结论状态：' + result['status'], '', result['summary']]
+        version = '资料类型：会话归档（无Git提交）' if question['origin'] == 'conversation' else '提交：' + question['commit']
+        lines = ['# ' + question['question'], '', version, '结论状态：' + result['status'], '', result['summary']]
         for claim in result['claims']:
             lines.extend(['', '- ' + claim['text']])
             for evidence in claim['evidence']:

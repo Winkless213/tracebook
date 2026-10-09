@@ -74,7 +74,7 @@ class Store:
 
     def projects(self):
         with self.db() as db:
-            return [dict(row) for row in db.execute('''SELECT p.*,s.commit_sha AS "commit",s.file_count,s.chunk_count,s.created_at AS imported_at
+            return [{**dict(row), 'origin': 'git' if row['commit'] else 'conversation'} for row in db.execute('''SELECT p.*,s.commit_sha AS "commit",s.file_count,s.chunk_count,s.created_at AS imported_at
                 FROM projects p JOIN snapshots s ON p.active_snapshot=s.id ORDER BY s.created_at DESC''')]
 
     def snapshot(self, sid):
@@ -84,6 +84,7 @@ class Store:
             raise KeyError(sid)
         data = dict(row)
         data['commit'] = data.pop('commit_sha')
+        data['origin'] = 'git' if data['commit'] else 'conversation'
         data['changes'] = json.loads(data['changes'])
         data['active'] = bool(data['active'])
         return data
@@ -168,7 +169,7 @@ class Store:
         usage = {key: sum(item[key] or 0 for item in attempts) for key in ['input_tokens', 'output_tokens']}
         usage['total_tokens'] = sum(usage.values())
         usage['unreported_calls'] = sum(item['input_tokens'] is None for item in attempts)
-        data.update(events=events, attempts=attempts, usage=usage, commit=snap['commit'], stale=not snap['active'], method='bm25-symbol')
+        data.update(events=events, attempts=attempts, usage=usage, commit=snap['commit'], origin=snap['origin'], stale=not snap['active'], method='bm25-symbol')
         return data
 
     def questions(self, pid):

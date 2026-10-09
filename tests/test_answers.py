@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 from test_knowledge import bundle
@@ -87,12 +89,15 @@ def test_llm_primary_bad_json_falls_back_with_accounting(monkeypatch):
     monkeypatch.setenv('LLM_API_KEY', 'test-only')
     monkeypatch.setenv('LLM_PRIMARY_MODEL', 'primary')
     monkeypatch.setenv('LLM_FALLBACK_MODEL', 'backup')
+    monkeypatch.setenv('LLM_VERIFY_MODEL', 'backup')
     calls = []
 
     def post(self, url, **kwargs):
         assert url.endswith('/v1/chat/completions')
         calls.append(kwargs['json']['model'])
         text = 'bad json' if len(calls) == 1 else '{"status":"insufficient","summary":"资料不足","claims":[],"gaps":["缺少资料"]}'
+        if len(calls) == 3:
+            text = '{"supported":true,"issues":[]}'
         return httpx.Response(200, request=httpx.Request('POST', url), json={'choices': [{'message': {'content': text}}], 'usage': {'prompt_tokens': 20, 'completion_tokens': 5}})
 
     monkeypatch.setattr(httpx.Client, 'post', post)
@@ -104,6 +109,45 @@ def test_llm_primary_bad_json_falls_back_with_accounting(monkeypatch):
 
     result = LLM().answer('问题', [], record, lambda: False)
     assert result['status'] == 'insufficient'
-    assert calls == ['primary', 'backup']
+    assert calls == ['primary', 'backup', 'backup']
     assert records[1][2] == 'failed'
     assert records[1][4]['input_tokens'] == 20
+
+
+def test_exact_quote_does_not_bypass_semantic_review(monkeypatch):
+    monkeypatch.setenv('LLM_BASE_URL', 'https://model.example/v1')
+    monkeypatch.setenv('LLM_API_KEY', 'test-only')
+    monkeypatch.setenv('LLM_PRIMARY_MODEL', 'primary')
+    monkeypatch.setenv('LLM_FALLBACK_MODEL', 'backup')
+    source = {'id': 'S1', 'content': '本次检索未提供旅游资料。'}
+    candidate = {'status': 'insufficient', 'summary': '整个项目没有旅游资料。', 'claims': [], 'gaps': ['缺少资料']}
+    calls, records = [], []
+
+    def post(self, url, **kwargs):
+        calls.append(kwargs['json'])
+        output = [candidate, {'supported': False, 'issues': ['把检索范围扩大成整个项目。']},
+                  {**candidate, 'summary': '本次检索未提供旅游资料。'}, {'supported': True, 'issues': []}][len(calls) - 1]
+        return httpx.Response(200, request=httpx.Request('POST', url), json={'choices': [{'message': {'content': json.dumps(output)}}]})
+
+    monkeypatch.setattr(httpx.Client, 'post', post)
+    def record(*args):
+        records.append(args)
+        return len(records)
+
+    result = LLM().answer('提供旅游资料', [source], record, lambda: False)
+    assert result['summary'] == '本次检索未提供旅游资料。'
+    assert len(calls) == 4
+    assert any(item[2] == 'rejected' for item in records)
+    assert any(item[2] == 'rejected' and '把检索范围扩大成整个项目' in (item[5] or '') for item in records)
+    assert any(message['role'] == 'assistant' and json.loads(message['content']) == candidate for message in calls[2]['messages'])
+
+
+def test_review_length_limit_cannot_accept_partial_verdict(monkeypatch):
+    monkeypatch.setenv('LLM_BASE_URL', 'https://model.example/v1')
+    monkeypatch.setenv('LLM_API_KEY', 'test-only')
+    def post(self, url, **kwargs):
+        return httpx.Response(200, request=httpx.Request('POST', url), json={
+            'choices': [{'message': {'content': '{"supported":true,"issues":[]}'}, 'finish_reason': 'length'}]})
+    monkeypatch.setattr(httpx.Client, 'post', post)
+    with pytest.raises(RuntimeError, match='额度'):
+        LLM().review('问题', [], {}, lambda *args: 1, lambda: False)

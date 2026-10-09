@@ -38,3 +38,17 @@ test('失败可续跑，但只有完成的回答才可导出', () => {
   assert.doesNotMatch(failed, /\/export/);
   assert.match(complete, /\/api\/questions\/q1\/export/);
 });
+
+test('检索与回答标注会话来源和历史时间，不把经验候选包装成代码版本', () => {
+  const historySource = { ...source, origin: 'experience', record_ids: ['r1', 'r2'], commit: '', time: '2025-01-02T03:04:00Z', path: '经验候选/提炼任务/1', provenance: { line: 29 } };
+  const search = renderToStaticMarkup(React.createElement(Answer, { search: { query: question.question, sources: [historySource] } }));
+  const answer = renderToStaticMarkup(React.createElement(Answer, { question: { ...question, sources: [historySource] } }));
+  const evidence = renderToStaticMarkup(React.createElement(Evidence, { sources: [historySource] }));
+  for (const html of [search, answer, evidence]) {
+    assert.match(html, /候选经验 · 待核实/);
+    assert.match(html, /2025/);
+    assert.doesNotMatch(html, /未提供版本/);
+  }
+  assert.match(evidence, /脱敏原文/);
+  assert.doesNotMatch(evidence, /原文件/);
+});

@@ -6,6 +6,8 @@ from threading import Lock
 import jieba
 from rank_bm25 import BM25Okapi
 
+from .history import HistoryStore
+
 jieba.setLogLevel(logging.ERROR)
 STOP = set('的 了 和 是 在 我 你 吗 什么 哪些 怎么 如何 请 需要 帮 一个 这个 那个 一下 可以 是否 能 要 给 有 都 只 还 为什么 项目 当前 the is a an in to for of what how do does can i my you your it are all must which please'.split())
 
@@ -50,22 +52,26 @@ def comparison_order(ranked, corpus, top_k):
 class Retriever:
     def __init__(self, store):
         self.store = store
+        self.history = HistoryStore(store)
         self.cache = OrderedDict()
         self.lock = Lock()
 
-    def index(self, sid):
+    def index(self, sid, pid=None):
+        key = (sid, self.history.revision(pid) if pid else None)
         with self.lock:
-            if sid not in self.cache:
+            if key not in self.cache:
                 corpus = self.store.corpus(sid)
+                if pid:
+                    corpus += self.history.corpus(pid)
                 terms = [tokenize(item['path'] + ' ' + item['symbol'] + '\n' + item['content']) for item in corpus]
-                self.cache[sid] = (corpus, [set(words) for words in terms], BM25Okapi(terms) if any(terms) else None)
+                self.cache[key] = (corpus, [set(words) for words in terms], BM25Okapi(terms) if any(terms) else None)
                 if len(self.cache) > 4:
                     self.cache.popitem(last=False)
-            return self.cache[sid]
+            return self.cache[key]
 
     def search(self, pid, question, sid=None, top_k=6, baseline=False):
         snapshot = self.store.resolve(pid, sid)
-        corpus, tokens, index = self.index(snapshot['id'])
+        corpus, tokens, index = self.index(snapshot['id'], pid if snapshot['active'] else None)
         query = tokenize(question)
         scores = index.get_scores(query) if index and query else [0] * len(corpus)
         identifiers = re.findall(r'[a-zA-Z_][a-zA-Z_0-9.]{3,}', question)
@@ -98,4 +104,6 @@ class Retriever:
             if len(sources) == top_k:
                 break
         warnings = [] if snapshot['active'] else ['当前选择的是历史快照，不能据此断言当前运行状态']
+        if any(source.get('origin') for source in sources):
+            warnings.append('会话是历史记录；AI提炼仅为候选经验，不能据此断言当前项目或线上状态')
         return {'snapshot': snapshot, 'sources': sources, 'query': question, 'method': 'term-overlap' if baseline else 'bm25-symbol', 'warnings': warnings}

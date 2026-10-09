@@ -1,9 +1,11 @@
+import threading
 import time
 
 
 class Worker:
     def __init__(self, store, retriever, model):
         self.store, self.retriever, self.model = store, retriever, model
+        self.stop = threading.Event()
 
     def process_next(self):
         identifier = self.store.claim()
@@ -19,7 +21,7 @@ class Worker:
                 self.store.update(identifier, sources=sources)
                 self.store.event(identifier, 'retrieved', f'已保存 {len(sources)} 条证据，引用固定于原快照')
             def cancelled():
-                return self.store.question(identifier)['status'] == 'cancelled'
+                return self.stop.is_set() or self.store.question(identifier)['status'] == 'cancelled'
             if cancelled():
                 return True
             if not sources:
@@ -38,12 +40,15 @@ class Worker:
                 self.store.update(identifier, status='completed', result=result, latency_ms=round((time.monotonic() - started) * 1000))
                 self.store.event(identifier, 'completed', '结果已保存；引用编号与摘录已校验，事实仍需结合原文判断')
         except Exception as exc:
+            if self.stop.is_set():
+                return True
             error = str(exc) if isinstance(exc, RuntimeError) else '处理失败，已保存问题与证据，可稍后重试'
             self.store.update(identifier, status='failed', error=error, latency_ms=round((time.monotonic() - started) * 1000))
             self.store.event(identifier, 'failed', error)
         return True
 
     def run(self, stop):
+        self.stop = stop
         self.store.recover()
         while not stop.is_set():
             if not self.process_next():

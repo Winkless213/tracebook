@@ -2,8 +2,10 @@ import sqlite3
 import subprocess
 
 import pytest
+from test_history import setup_history, sync
 from test_knowledge import bundle
 
+from devrag.history import HistoryStore
 from devrag.store import Store
 from scripts.backup import copy_database
 from scripts.export_repo import export
@@ -42,3 +44,18 @@ def test_backup_restores_wal_state_and_refuses_overwrite(tmp_path):
             copy_database(store.path, target)
     finally:
         keeper.close()
+
+
+def test_backup_restores_history_input_jobs_and_attempts(tmp_path):
+    store, history, pid = setup_history(tmp_path)
+    created = sync(history, pid, auto=True)
+    history.claim()
+    history.begin_attempt(created['job_id'], 'recovery-test')
+    target = tmp_path / 'history-restore' / 'knowledge.sqlite'
+    copy_database(store.path, target)
+    restored = HistoryStore(Store(target))
+    assert restored.session(created['session']['id']) == history.session(created['session']['id'])
+    restored.recover()
+    assert restored.job(created['job_id'])['status'] == 'queued'
+    assert restored.job(created['job_id'])['attempts'][0]['status'] == 'interrupted'
+    assert history.job(created['job_id'])['status'] == 'generating'

@@ -1,9 +1,39 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { KINDS, shortCommit, sourceLines } from '../lib/domain.js';
+import { historyRecordIds, historyTime, isHistorySource } from '../lib/history.js';
+import { HistoryRecordLoader } from './HistoryRecord.jsx';
 import { Icon, Notice, Spinner } from './Ui.jsx';
 
-export default function Evidence({ sources, activeId, onSelect, snapshotId, onUnauthorized }) {
+const sourceOption = (source) => `${source.id} · ${source.path || '会话记录'} · ${isHistorySource(source) ? `${source.origin === 'experience' ? '候选经验' : '会话记录'} · ${historyTime(source.time)}` : `L${source.start_line}–${source.end_line}`}`;
+
+function ConversationEvidence({ sources, source, onSelect, onUnauthorized }) {
+  const [view, setView] = useState('snippet');
+  const ids = historyRecordIds(source);
+  const [selectedRecord, setSelectedRecord] = useState(ids[0]);
+  const recordId = ids.includes(selectedRecord) ? selectedRecord : ids[0];
+  return <aside className="evidence-panel card conversation-source-panel" id="evidence-panel" tabIndex={-1} aria-labelledby="evidence-title">
+    <div className="section-topline"><div className="section-heading"><span className="square-icon"><Icon name="link" size={17} /></span><h2 id="evidence-title">证据上下文</h2></div><span className="evidence-count">{sources.length.toString().padStart(2, '0')}</span></div>
+    <label className="source-select-label" htmlFor="source-select">选择证据</label>
+    <select id="source-select" className="source-select" value={source.id} onChange={(event) => onSelect(event.target.value)}>{sources.map((item) => <option key={item.id} value={item.id}>{sourceOption(item)}</option>)}</select>
+    <div className="source-heading"><div><span className="source-id">{source.id}</span><span className="kind-tag">{source.origin === 'experience' ? '候选经验 · 待核实' : '会话记录'}</span></div><h3>{source.path || '会话记录'}</h3><div className="source-meta"><time dateTime={source.time || undefined}>{historyTime(source.time)}</time><span>·</span><span>{ids.length} 条原文依据</span></div></div>
+    <div className="source-tabs" role="group" aria-label="证据显示方式"><button id="snippet-tab" aria-pressed={view === 'snippet'} aria-controls="source-content" onClick={() => setView('snippet')}>命中片段</button><button id="document-tab" aria-pressed={view === 'document'} aria-controls="source-content" onClick={() => setView('document')}>脱敏原文</button></div>
+    <div id="source-content" className="conversation-source-content" aria-labelledby={view === 'document' ? 'document-tab' : 'snippet-tab'}>
+      {view === 'snippet' ? <><pre className="conversation-text" tabIndex={0}>{source.content}</pre>{source.origin === 'experience' && <p className="conversation-note">候选经验来自历史会话，使用前请逐条核对原文依据。</p>}</> : !ids.length ? <Notice tone="warning">该来源未提供可回查的记录 ID。</Notice> : <>
+        {ids.length > 1 && <label className="conversation-evidence-select">原文依据<select aria-label="选择原文依据" value={recordId} onChange={(event) => setSelectedRecord(event.target.value)}>{ids.map((id, index) => <option key={id} value={id}>依据 {index + 1} · {id}</option>)}</select></label>}
+        <HistoryRecordLoader key={recordId} recordId={recordId} onUnauthorized={onUnauthorized} />
+      </>}
+    </div>
+    <div className="source-footer"><Icon name="lock" size={13} /><span>会话原文以脱敏文本回查，候选经验需核实。</span></div>
+  </aside>;
+}
+
+export default function Evidence(props) {
+  const source = props.sources.find((item) => item.id === props.activeId) || props.sources[0];
+  return isHistorySource(source) ? <ConversationEvidence key={`${source.id}:${historyRecordIds(source).join(':')}`} {...props} source={source} /> : <FileEvidence {...props} />;
+}
+
+function FileEvidence({ sources, activeId, onSelect, snapshotId, onUnauthorized }) {
   const source = sources.find((item) => item.id === activeId) || sources[0];
   const [view, setView] = useState('snippet');
   const [document, setDocument] = useState(null);
@@ -35,7 +65,7 @@ export default function Evidence({ sources, activeId, onSelect, snapshotId, onUn
     <div className="section-topline"><div className="section-heading"><span className="square-icon"><Icon name="link" size={17} /></span><h2 id="evidence-title">证据上下文</h2></div><span className="evidence-count">{sources.length.toString().padStart(2, '0')}</span></div>
     {!source ? <div className="evidence-empty"><div className="evidence-placeholder"><span /><span /><span /><span /></div><h3>回到原文，确认每个结论</h3><p>检索或提问后，相关文件会显示在这里。点击回答中的引用，查看对应片段和原始行号。</p><div className="evidence-empty-footer"><Icon name="file" size={15} />文件 · 行号 · 提交版本</div></div> : <>
       <label className="source-select-label" htmlFor="source-select">选择证据</label>
-      <select id="source-select" className="source-select" value={source.id} onChange={(event) => onSelect(event.target.value)}>{sources.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.path} · L{item.start_line}–{item.end_line}</option>)}</select>
+      <select id="source-select" className="source-select" value={source.id} onChange={(event) => onSelect(event.target.value)}>{sources.map((item) => <option key={item.id} value={item.id}>{sourceOption(item)}</option>)}</select>
       <div className="source-heading"><div><span className="source-id">{source.id}</span><span className="kind-tag">{KINDS[source.kind] || source.kind}</span></div><h3>{source.path}</h3><div className="source-meta"><code>{shortCommit(source.commit)}</code><span>·</span><span>L{source.start_line}–{source.end_line}</span></div>{source.symbol && <div className="source-symbol">{source.symbol}</div>}</div>
       <div className="source-tabs" role="group" aria-label="证据显示方式"><button id="snippet-tab" aria-pressed={view === 'snippet'} aria-controls="source-content" onClick={() => setView('snippet')}>命中片段</button><button id="document-tab" aria-pressed={view === 'document'} aria-controls="source-content" onClick={() => setView('document')}>原文件</button></div>
       <div id="source-content" aria-labelledby={view === 'document' ? 'document-tab' : 'snippet-tab'}>

@@ -66,6 +66,19 @@ def smoke(port, release, password, ingest=False):
         imported = request('/api/import', bundle)
         found = request('/api/search', {'project_id': imported['project']['id'], 'question': 'deployment_probe'})
         assert found['sources'][0]['content'] == text.rstrip('\n')
+        conversation = request('/api/history/projects', {'name': 'history-deployment-smoke'})
+        assert conversation['origin'] == 'conversation' and conversation['commit'] == ''
+        checksum = hashlib.sha256(text.encode()).hexdigest()
+        record = {'id': checksum, 'role': 'tool-output', 'text': text, 'time': '2026-10-09T00:00:00Z',
+                  'provenance': {'file': 'deployment-probe.jsonl', 'line': 1, 'record_sha256': checksum, 'source_sha256': checksum}}
+        batch = {'project_id': conversation['id'], 'harness': 'codex', 'native_id': 'deployment-probe',
+                 'title': 'deployment probe', 'records': [record], 'auto_distill': False}
+        synced = request('/api/history/sync', batch)
+        assert request('/api/history/sync', batch)['added'] == 0
+        detail = request('/api/history/sessions/' + synced['session']['id'])
+        assert detail['total'] == 1 and detail['records'][0]['text'] == text
+        history_sources = request('/api/search', {'project_id': conversation['id'], 'question': 'deployment_probe'})['sources']
+        assert history_sources[0]['origin'] == 'conversation'
     return {'health': 'ok', 'auth': 'ok', 'frontend_assets': 'ok', 'import_search': 'ok' if ingest else 'candidate-only'}
 
 
