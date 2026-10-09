@@ -8,6 +8,8 @@
 
 `package-manifest.json`包含revision和逐文件SHA256；部署拒绝错误目录、错误提交格式、文件哈希不一致。配置只读取 `/opt/devrag/config.env`（0600），运行数据只挂载 `/opt/devrag/data`。容器UID10001、2 CPU、2GiB内存、全部capability移除。前端静态文件在镜像构建阶段完成，运行时不覆盖产物。
 
+本机用 `python scripts/package.py --output output/releases/tracebook.tar.gz` 打包，只读取干净提交中的文件，检查压缩包完整性后传送。先核对包SHA256，再安全解包到新的release目录；已有路径不覆盖。
+
 ```sh
 python3 /opt/devrag/releases/<commit>/scripts/deploy.py /opt/devrag/releases/<commit> --protect-container other-app-backend --protect-container other-app-frontend --protect-container other-app-db --protect-container other-app-proxy
 ```

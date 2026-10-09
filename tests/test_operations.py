@@ -42,4 +42,3 @@ def test_backup_restores_wal_state_and_refuses_overwrite(tmp_path):
             copy_database(store.path, target)
     finally:
         keeper.close()
-
