@@ -91,8 +91,8 @@ def deploy(args):
         raise ValueError('独立应用配置缺失')
     manifest = json.loads((release_path / 'package-manifest.json').read_text())
     assert manifest['revision'] == revision
-    for name, checksum in manifest['files'].items():
-        target = (release_path / name).resolve()
+    for file_name, checksum in manifest['files'].items():
+        target = (release_path / file_name).resolve()
         assert target.is_relative_to(release_path) and hashlib.sha256(target.read_bytes()).hexdigest() == checksum
     protected = {name: identity(name) for name in args.protect_container}
     assert all(item and item['status'] == 'running' for item in protected.values())
@@ -101,8 +101,8 @@ def deploy(args):
     # 只构建已核验文件；避免目录残留或打包时间戳影响构建身份。
     with tempfile.TemporaryFile() as stream:
         with tarfile.open(fileobj=stream, mode='w:gz') as archive:
-            for name in manifest['files']:
-                archive.add(release_path / name, arcname=name)
+            for file_name in manifest['files']:
+                archive.add(release_path / file_name, arcname=file_name)
         stream.seek(0)
         subprocess.run(['docker', 'build', '--build-arg', 'APP_RELEASE=' + revision, '-t', image, '-'], stdin=stream, check=True)
     assert json.loads(run('docker', 'image', 'inspect', image))[0]['Config']['Labels']['org.opencontainers.image.revision'] == revision
