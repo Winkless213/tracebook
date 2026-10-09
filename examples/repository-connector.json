@@ -1,0 +1,22 @@
+{
+  "url": "http://127.0.0.1:3415",
+  "state_dir": "C:/path/to/private-repository-state",
+  "repositories": [
+    {
+      "kind": "local",
+      "path": "C:/path/to/project",
+      "project": "my-project",
+      "branch": "feature/development",
+      "includes": ["README.md", "app", "docs", "tests"],
+      "interval_seconds": 30
+    },
+    {
+      "kind": "github",
+      "url": "https://github.com/owner/repository.git",
+      "project": "my-project",
+      "branch": "main",
+      "includes": ["README.md", "app", "docs", "tests"],
+      "interval_seconds": 300
+    }
+  ]
+}

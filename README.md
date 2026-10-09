@@ -52,6 +52,23 @@ python scripts/export_repo.py C:/path/to/repo --project my-project --include REA
 
 开发经验可来自已有交接、故障文档或明确选定的开发会话。通用规则仍维护在原有 AGENTS.md/CLAUDE.md；提炼结果只作为候选经验，不自动改写规则。
 
+### 自动跟踪代码与文档
+
+复制 `examples/repository-connector.json`，填写明确的本地仓库或GitHub URL、固定分支、同一组代码和文档目录，再运行：
+
+```powershell
+python scripts/sync_repositories.py path/to/repository-connector.json
+python scripts/sync_repositories.py path/to/repository-connector.json --watch
+```
+
+本地默认每30秒检查HEAD；GitHub默认每5分钟核对分支提交，有变化才抓取到连接器自己的裸仓库并导入。新增、修改和删除随完整快照原子生效，历史引用保留。读取与同步不调用模型。远端失败保留上次成功快照并在下一轮重试，不能把旧内容当作已追上远端。
+
+两类来源都只同步已提交的允许文本，代码与文档绑定同一个commit。未提交和untracked不入库；连接器不commit、pull、checkout或push开发仓库。当前本地分支若与配置不符则停止该来源，避免串项目。GitHub使用现有Git认证；URL不得嵌入token，HTTPS代理可显式配置本机 `proxy`（例如 `http://127.0.0.1:7897`）。不在日志输出凭据。
+
+同一项目不同分支可在页面切换；同一个项目分支只能配置一个来源，避免本地与远端交替覆盖。会话的project_id仍需绑定到正确的项目分支，尚不自动推断历史聊天对应哪个提交。没有GitHub远端的本地仓库也能同步，不会为此创建或推送远端仓库。
+
+每次输出包含已核对时间、同步时间、commit和snapshot；状态与游标写入独立state_dir。使用同一配置可继续，服务端恢复到旧备份后用 `--force` 重新核对导入。后台运行和开机启动需由使用者启动，此脚本不安装计划任务。单快照仍受200文件、2MB范围约束，超出时缩小明确的模块范围，不静默截断。
+
 ## 接入 Codex / Claude 会话
 
 本机连接器只读配置中列出的 JSONL 文件，使用 [deja-vu v0.21.7](https://github.com/vshulcz/deja-vu) 的 Windows 可执行文件在隔离目录索引和脱敏，再同步到认证 API。固定二进制 SHA256 为 `85db2a1b094b4b9a7afead17ade22c9b0ef746955e3314efe2e5e730f29c8418`。连接器不安装 hooks 或自启动，不扫描其他会话，不改写原始日志。
