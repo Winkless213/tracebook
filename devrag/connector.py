@@ -3,7 +3,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -107,6 +109,36 @@ def export_records(messages, snapshot, native_id):
     return records
 
 
+def normalize_snapshot(source, destination, harness, progress):
+    full_hash, complete_hash, prefix_hash = hashlib.sha256(), hashlib.sha256(), hashlib.sha256()
+    offset, completed, pending, lines = progress.get('copied_bytes', 0), 0, 0, {}
+    with source.open('rb') as stream:
+        # 固定本轮字节边界，活动会话新追加的内容留给下一轮。
+        remaining = os.fstat(stream.fileno()).st_size
+        number = 0
+        while remaining:
+            raw = stream.readline(remaining)
+            if not raw:
+                break
+            remaining -= len(raw)
+            full_hash.update(raw)
+            if not raw.endswith(b'\n'):
+                pending = len(raw)
+                break
+            prefix_hash.update(raw[:max(0, offset - completed)])
+            complete_hash.update(raw)
+            completed += len(raw)
+            number += 1
+            record = json.loads(raw.decode('utf-8'))
+            lines[number] = {'sha256': sha(raw), 'time': record.get('timestamp', '')}
+            normalized = normalize_line(record, harness, number)
+            destination.write(json.dumps(normalized, ensure_ascii=False, separators=(',', ':')).encode('utf-8') + b'\n')
+    if completed < offset or (offset and prefix_hash.hexdigest() != progress['prefix_sha256']):
+        raise ValueError('原始会话已截断或改写，保留旧记录并停止；请使用新的状态目录核查')
+    return {'source': str(source), 'sha256': full_hash.hexdigest(), 'complete_sha256': complete_hash.hexdigest(),
+            'lines': lines, 'pending_bytes': pending, 'copied_bytes': completed}
+
+
 class DejaSource:
     def __init__(self, executable, state, source):
         self.executable = Path(executable).resolve()
@@ -124,29 +156,22 @@ class DejaSource:
 
     def prepare(self):
         source = Path(self.source['path'])
-        if source.suffix != '.jsonl' or source.stat().st_size > 128_000_000:
-            raise ValueError('本连接器仅支持128MB以内的明确JSONL文件')
-        data = source.read_bytes()
-        complete = data[:data.rfind(b'\n') + 1]
-        offset = self.progress.get('copied_bytes', 0)
-        if len(complete) < offset or (offset and sha(complete[:offset]) != self.progress['prefix_sha256']):
-            raise ValueError('原始会话已截断或改写，保留旧记录并停止；请使用新的状态目录核查')
-        lines, adapted = {}, []
-        for number, raw in enumerate(complete.splitlines(keepends=True), 1):
-            record = json.loads(raw.decode('utf-8'))
-            lines[number] = {'sha256': sha(raw), 'time': record.get('timestamp', '')}
-            normalized = normalize_line(record, self.source['harness'], number)
-            adapted.append(json.dumps(normalized, ensure_ascii=False, separators=(',', ':')).encode('utf-8') + b'\n')
-        normalized = b''.join(adapted)
-        previous = self.copy.read_bytes() if self.copy.exists() else b''
-        if not normalized.startswith(previous):
-            raise ValueError('隔离索引副本已改写，请保留现场核查')
-        self.copy.parent.mkdir(parents=True, exist_ok=True)
-        with self.copy.open('ab') as stream:
-            stream.write(normalized[len(previous):])
-        self.progress.update(copied_bytes=len(complete), prefix_sha256=sha(complete))
+        if source.suffix != '.jsonl':
+            raise ValueError('本连接器仅支持明确JSONL文件')
+        with tempfile.TemporaryFile(mode='w+b', dir=self.root) as staged:
+            snapshot = normalize_snapshot(source, staged, self.source['harness'], self.progress)
+            staged.seek(0)
+            if self.copy.exists():
+                with self.copy.open('rb') as previous:
+                    for block in iter(lambda: previous.read(1024 * 1024), b''):
+                        if staged.read(len(block)) != block:
+                            raise ValueError('隔离索引副本已改写，请保留现场核查')
+            self.copy.parent.mkdir(parents=True, exist_ok=True)
+            with self.copy.open('ab') as stream:
+                shutil.copyfileobj(staged, stream, length=1024 * 1024)
+        self.progress.update(copied_bytes=snapshot.pop('copied_bytes'), prefix_sha256=snapshot['complete_sha256'])
         write_json(self.checkpoint, self.progress)
-        return {'source': str(source), 'sha256': sha(data), 'complete_sha256': sha(complete), 'lines': lines, 'pending_bytes': len(data) - len(complete)}
+        return snapshot
 
     def environment(self):
         env = {key: value for key, value in os.environ.items() if not key.startswith('DEJA_')}

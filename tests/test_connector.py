@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -63,3 +64,41 @@ def test_export_has_exact_origin_secret_redaction_and_no_truncation(tmp_path):
     assert export_records([{'role': 'user', 'text': '[[tracebook-source:1]]'}], snapshot, 'demo') == []
     with pytest.raises(ValueError, match='来源'):
         export_records([{'role': 'assistant', 'text': '没有可定位来源'}], snapshot, 'demo')
+
+
+def test_preparation_streams_source_and_previous_copy_without_whole_file_reads(tmp_path, monkeypatch):
+    source = tmp_path / 'rollout-large.jsonl'
+    first = json.dumps(raw_record('第一段'), ensure_ascii=False).encode('utf-8') + b'\n'
+    second = json.dumps(raw_record('第二段'), ensure_ascii=False).encode('utf-8') + b'\n'
+    source.write_bytes(first)
+    adapter = DejaSource(tmp_path / 'deja.exe', tmp_path / 'state', {'harness': 'codex', 'path': str(source), 'native_id': 'demo'})
+
+    def reject_read_bytes(path):
+        raise AssertionError('会话和索引副本必须逐行或分块读取')
+
+    monkeypatch.setattr(Path, 'read_bytes', reject_read_bytes)
+    snapshot = adapter.prepare()
+    assert snapshot['complete_sha256'] == hashlib.sha256(first).hexdigest()
+    with source.open('ab') as stream:
+        stream.write(second + b'{"incomplete":')
+    snapshot = adapter.prepare()
+    assert snapshot['complete_sha256'] == hashlib.sha256(first + second).hexdigest()
+    assert snapshot['sha256'] == hashlib.sha256(first + second + b'{"incomplete":').hexdigest()
+    assert snapshot['pending_bytes'] == len(b'{"incomplete":')
+    assert len(snapshot['lines']) == 2
+    assert adapter.copy.read_text(encoding='utf-8').count('tracebook-source:') == 2
+
+
+def test_changed_source_does_not_append_to_verified_copy_or_advance_checkpoint(tmp_path):
+    source = tmp_path / 'rollout-demo.jsonl'
+    first = json.dumps(raw_record('原始记录'), ensure_ascii=False).encode('utf-8') + b'\n'
+    source.write_bytes(first)
+    adapter = DejaSource(tmp_path / 'deja.exe', tmp_path / 'state', {'harness': 'codex', 'path': str(source), 'native_id': 'demo'})
+    adapter.prepare()
+    previous, checkpoint = adapter.copy.read_bytes(), adapter.checkpoint.read_bytes()
+    changed = json.dumps(raw_record('被改写的记录'), ensure_ascii=False).encode('utf-8') + b'\n'
+    source.write_bytes(changed + first)
+    with pytest.raises(ValueError, match='改写'):
+        adapter.prepare()
+    assert adapter.copy.read_bytes() == previous
+    assert adapter.checkpoint.read_bytes() == checkpoint
