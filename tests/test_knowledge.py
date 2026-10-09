@@ -104,3 +104,29 @@ def test_knowledge_map_preserves_scope_and_anchors_without_inventing_decisions(t
     assert code['anchors'][0] == {'label': 'load_cache', 'start_line': 1, 'end_line': 2}
     assert any('测试' in gap for gap in catalog['gaps'])
     assert any('设计原因' in gap for gap in catalog['gaps'])
+
+
+def test_code_document_comparison_includes_relevant_implementation(tmp_path):
+    store = Store(tmp_path / 'kb.sqlite')
+    files = {f'docs/plan{index}.md': '# 对话设计\n多轮对话的历史上下文传递给模型，设计文档规划代码实现。' for index in range(8)}
+    files['app/query.py'] = 'def query(history):\n    """历史上下文。"""\n    return history\n'
+    pid = store.ingest(bundle(files))['project']['id']
+    sources = Retriever(store).search(pid, '多轮对话的历史上下文怎样传递？请区分设计文档和实现代码。')['sources']
+    assert any(source['kind'] == 'code' for source in sources)
+    assert any(source['kind'] == 'document' for source in sources)
+
+
+def test_design_symbol_links_to_code_without_chinese_keyword_overlap(tmp_path):
+    store = Store(tmp_path / 'kb.sqlite')
+    data = bundle({'docs/design.md': '# 多轮对话\n历史上下文设计文档规划 QueryService 使用 build_messages 传递历史。',
+        'app/query.py': 'class QueryService:\n    def query_sync(self, question):\n        return build_messages(question)\n'})
+    pid = store.ingest(data)['project']['id']
+    sources = Retriever(store).search(pid, '多轮对话如何传递历史上下文？请核对设计文档和实现代码。')['sources']
+    assert any(source['symbol'] == 'QueryService.query_sync' for source in sources)
+
+
+def test_heading_without_body_does_not_consume_evidence_slot(tmp_path):
+    store = Store(tmp_path / 'kb.sqlite')
+    pid = store.ingest(bundle({'docs/design.md': '# 多轮对话\n\n## 消息传递\n多轮对话通过 history 字段传递。'}))['project']['id']
+    sources = Retriever(store).search(pid, '多轮对话')['sources']
+    assert sources and all(source['content'].strip() != '# 多轮对话' for source in sources)

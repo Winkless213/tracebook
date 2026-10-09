@@ -80,6 +80,9 @@ def start(name, image, config, data, port):
 def deploy(args):
     root, release_path = args.root.resolve(), args.release_path.resolve()
     revision = release_path.name
+    name = args.name
+    if not re.fullmatch('[a-z][a-z0-9-]{2,48}', name):
+        raise ValueError('容器名称必须是3至49位小写字母、数字或短横线')
     if not re.fullmatch('[a-f0-9]{40}', revision) or release_path.parent != root / 'releases':
         raise ValueError('release 必须位于指定根目录的 releases/<40位Git提交>')
     config = root / 'config.env'
@@ -103,7 +106,7 @@ def deploy(args):
         stream.seek(0)
         subprocess.run(['docker', 'build', '--build-arg', 'APP_RELEASE=' + revision, '-t', image, '-'], stdin=stream, check=True)
     assert json.loads(run('docker', 'image', 'inspect', image))[0]['Config']['Labels']['org.opencontainers.image.revision'] == revision
-    candidate = 'tracebook-candidate-' + revision[:12]
+    candidate = name + '-candidate-' + revision[:12]
     if inspect(candidate):
         raise ValueError('候选容器已存在，请先检查上次部署状态')
     start(candidate, image, config, root / 'candidate-data' / revision, args.candidate_port)
@@ -113,27 +116,27 @@ def deploy(args):
         report['candidate_identity'] = identity(candidate)
     finally:
         run('docker', 'stop', '--time', '165', candidate)
-    old = identity('tracebook')
-    backup_name = 'tracebook-previous-' + str(int(time.time()))
+    old = identity(name)
+    backup_name = name + '-previous-' + str(int(time.time()))
     report['previous'] = old
     if old:
         report['backup'] = copy_database(root / 'data' / 'knowledge.sqlite', root / 'backups' / (backup_name + '.sqlite'))
-        run('docker', 'stop', '--time', '165', 'tracebook')
-        run('docker', 'rename', 'tracebook', backup_name)
+        run('docker', 'stop', '--time', '165', name)
+        run('docker', 'rename', name, backup_name)
     try:
-        start('tracebook', image, config, root / 'data', args.port)
+        start(name, image, config, root / 'data', args.port)
         report['live'] = smoke(args.port, revision, env['APP_PASSWORD'])
-        report['identity'] = identity('tracebook')
+        report['identity'] = identity(name)
         assert report['identity']['release'] == revision
         assert report['identity']['image'] == report['candidate_identity']['image']
         assert {name: identity(name) for name in protected} == protected
     except Exception:
-        if inspect('tracebook'):
-            run('docker', 'stop', '--time', '165', 'tracebook')
-            run('docker', 'rename', 'tracebook', 'tracebook-failed-' + str(int(time.time())))
+        if inspect(name):
+            run('docker', 'stop', '--time', '165', name)
+            run('docker', 'rename', name, name + '-failed-' + str(int(time.time())))
         if old:
-            run('docker', 'rename', backup_name, 'tracebook')
-            run('docker', 'start', 'tracebook')
+            run('docker', 'rename', backup_name, name)
+            run('docker', 'start', name)
             smoke(args.port, old['release'], env['APP_PASSWORD'])
         raise
     report['protected_unchanged'] = True
@@ -150,5 +153,6 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=Path, default=Path('/opt/devrag'))
     parser.add_argument('--port', type=int, default=8083)
     parser.add_argument('--candidate-port', type=int, default=18083)
+    parser.add_argument('--name', default='tracebook')
     parser.add_argument('--protect-container', action='append', default=[])
     deploy(parser.parse_args())

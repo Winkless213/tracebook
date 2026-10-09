@@ -16,6 +16,8 @@
 
 `POST /api/search` → `Retriever.search` → 选中快照的切片 → 中文分词、BM25 与符号匹配 → 最多六个默认片段、24,000 字符证据预算。
 
+明确要求对照“代码”和“文档”时，额外沿命中文档里出现的类/函数符号查找对应实现，并保留双方证据；只有标题没有正文的Markdown片段不占证据槽。这是一跳符号关联，尚不等于完整依赖或调用图。未召回某个文件不代表完整快照或仓库没有该文件。
+
 `POST /api/questions` → 固定 snapshot_id 并持久化问题 → 单 worker 检索 → `LLM.answer` 主模型/备用模型有限尝试 → 结构与连续原文校验 → 保存回答及用量。`validate_answer` 验证引用的存在和逐字匹配，不能单独证明结论语义正确。
 
 首版使用 SQLite、单 worker 和单人登录，以减少运行组件；最多同时排队五题。模型调用可能在取消或进程中断后继续计费。重启只自动恢复一次，再中断则转失败，由用户决定重试。相关行为分别位于 `devrag/store.py`、`devrag/worker.py`、`devrag/llm.py`，对应测试在 `tests/test_answers.py`。

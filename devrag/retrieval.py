@@ -22,6 +22,31 @@ def tokenize(text):
     return result
 
 
+def comparison_order(ranked, corpus, top_k):
+    # 中英文混合仓库中，设计文档可通过明确符号指向未命中中文词项的实现。
+    ordered = sorted(ranked, reverse=True)
+    documents = [number for _, number in ordered if corpus[number]['kind'] == 'document'][:top_k]
+    references = set()
+    for number in documents:
+        references.update(re.findall(r'\b(?:[A-Z][A-Za-z0-9]+|[a-zA-Z]+_[a-zA-Z_0-9]+)\b', corpus[number]['content']))
+    values = {number: value for value, number in ordered}
+    linked = {}
+    for number, item in enumerate(corpus):
+        if item['kind'] != 'code':
+            continue
+        terms = set(re.findall(r'[A-Za-z_][A-Za-z_0-9]*', item['symbol'] + ' ' + item['content']))
+        matches = references & terms
+        if matches and references & set(item['symbol'].split('.')):
+            values[number] = values.get(number, 0) + len(matches) * 5
+            linked[number] = len(matches)
+    code = sorted(((linked.get(number, 0), value, number) for number, value in values.items() if corpus[number]['kind'] == 'code'), reverse=True)[:2]
+    symbols = {part for _, _, number in code for part in corpus[number]['symbol'].split('.')}
+    linked_documents = [number for number in documents if symbols & set(re.findall(r'[A-Za-z_][A-Za-z_0-9]*', corpus[number]['content']))]
+    priority = [number for _, _, number in code] + (linked_documents or documents)[:1]
+    rest = [number for _, number in sorted(((value, number) for number, value in values.items()), reverse=True)]
+    return [(values[number], number) for number in dict.fromkeys(priority + rest)]
+
+
 class Retriever:
     def __init__(self, store):
         self.store = store
@@ -51,14 +76,19 @@ class Retriever:
             if not overlap:
                 continue
             item = corpus[number]
+            if item['kind'] == 'document' and all(line.startswith('#') for line in item['content'].splitlines() if line.strip()):
+                continue
             # 明确点名的符号已删除时，不能用拆开的通用单词制造命中。
             if explicit_symbols and not any(word in tokens[number] for word in explicit_symbols):
                 continue
             exact = sum(word.lower() in (item['path'] + ' ' + item['symbol']).lower() for word in identifiers)
             value = len(overlap) if baseline else float(score) + exact * 5
             ranked.append((value, number))
+        ordered = sorted(ranked, reverse=True)
+        if not baseline and '代码' in question and '文档' in question:
+            ordered = comparison_order(ranked, corpus, top_k)
         sources, budget, paths = [], 24000, {}
-        for score, number in sorted(ranked, reverse=True):
+        for score, number in ordered:
             item = corpus[number]
             if paths.get(item['path'], 0) >= 3 or len(item['content']) > budget:
                 continue

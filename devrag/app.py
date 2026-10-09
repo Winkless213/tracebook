@@ -18,9 +18,9 @@ from .store import Store
 from .worker import Worker
 
 SAMPLES = [
-    {'id': 'cache', 'title': '设计决策', 'description': '查询缓存策略与取舍', 'question': '为什么停用问答答案缓存？当前如何保证新增和删除资料对多个进程生效？'},
-    {'id': 'fallback', 'title': '故障恢复', 'description': '区分输出前失败与输出后中断', 'question': '流式回答中，主模型已经输出文字后失败，还能切换到备用模型吗？'},
-    {'id': 'release', 'title': '发布证据', 'description': '查找部署验证与已知限制', 'question': '部署如何确认运行的是新版本？是否已经实际演练过数据库灾难恢复？'},
+    {'id': 'flow', 'title': '核心流程', 'description': '从代码和文档定位入口', 'question': '这个项目从请求进入到生成回答的核心流程是什么？请核对代码与文档并给出具体入口。'},
+    {'id': 'fallback', 'title': '故障恢复', 'description': '核对已经实现的故障处理', 'question': '调用模型失败时怎样处理？请核对代码与文档中的重试和备用模型机制。'},
+    {'id': 'release', 'title': '发布证据', 'description': '区分验证记录与计划', 'question': '项目的部署与验证流程是什么？哪些已有证据，哪些只是计划？'},
     {'id': 'missing', 'title': '知识边界', 'description': '检查库内没有依据的请求', 'question': '这个项目现在的生产系统在线用户数和今天的真实付费转化率是多少？'},
 ]
 
