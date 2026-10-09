@@ -36,7 +36,8 @@ def fingerprint(root):
 
 
 def remote_json(command):
-    result = subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8', timeout=240)
+    result = subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8', timeout=240,
+                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     return json.loads(result.stdout)
 
 
@@ -94,12 +95,14 @@ def publish(root, state, host, remote_root='/opt/devrag', verify=None, force=Fal
         tool = Path(__file__).with_name('install_knowledge.py')
         tool_name = 'knowledge-install-' + hashlib.sha256(tool.read_bytes()).hexdigest()[:16] + '.py'
         ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', host]
-        subprocess.run(['scp', '-o', 'BatchMode=yes', str(tool), host + ':' + remote_root + '/' + tool_name], check=True, timeout=120)
+        subprocess.run(['scp', '-o', 'BatchMode=yes', str(tool), host + ':' + remote_root + '/' + tool_name],
+                       check=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         command = [*ssh, 'python3', remote_root + '/' + tool_name, '--data', remote_root + '/data']
         current = remote_json([*command, '--status'])
         installed = current
         if current.get('manifest_sha256') != packaged['manifest_sha256']:
-            subprocess.run(['scp', '-o', 'BatchMode=yes', str(archive), host + ':' + remote_root + '/' + archive.name], check=True, timeout=180)
+            subprocess.run(['scp', '-o', 'BatchMode=yes', str(archive), host + ':' + remote_root + '/' + archive.name],
+                           check=True, timeout=180, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             installed = remote_json([*command, '--archive', remote_root + '/' + archive.name,
                                      '--sha256', packaged['sha256'], '--expected-catalog', current['catalog_sha256']])
         readback = verify() if verify else None

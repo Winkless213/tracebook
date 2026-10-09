@@ -25,7 +25,8 @@ def git(path, args, proxy=None):
     if proxy:
         command += ['-c', 'http.proxy=' + proxy]
     result = subprocess.run([*command, *args], capture_output=True, text=True, encoding='utf-8',
-                            errors='replace', timeout=600, env=GIT_ENV)
+                            errors='replace', timeout=600, env=GIT_ENV,
+                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode:
         raise RuntimeError(f'git {args[0]} failed (exit {result.returncode})')
     return result.stdout.strip()
@@ -33,7 +34,8 @@ def git(path, args, proxy=None):
 
 def discover(owner, proxy):
     credential = subprocess.run(['git', 'credential', 'fill'], input='protocol=https\nhost=github.com\n\n',
-                                text=True, encoding='utf-8', capture_output=True, timeout=30, env=GIT_ENV)
+                                text=True, encoding='utf-8', capture_output=True, timeout=30, env=GIT_ENV,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     values = dict(line.split('=', 1) for line in credential.stdout.splitlines() if '=' in line)
     headers = {'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
                'User-Agent': 'Tracebook-knowledge-sync'}
@@ -119,7 +121,8 @@ def refresh_sources(owner, repositories, packs, catalog, inventory_path, proxy=N
     repos.extend({**row, 'sync_status': 'not_listed', 'sync_checked_at': checked}
                  for row in previous if row['name'] not in found)
     save_json(catalog, {**inventory, 'repositories': repos})
-    subprocess.run(['node', str(Path(__file__).parent / 'knowledge/pack-projects.mjs'), str(catalog), str(packs)], check=True)
+    subprocess.run(['node', str(Path(__file__).parent / 'knowledge/pack-projects.mjs'), str(catalog), str(packs)],
+                   check=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     return repos
 
 

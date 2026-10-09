@@ -186,7 +186,8 @@ class DejaSource:
     def run(self, *args):
         if sha(self.executable.read_bytes()) != DEJA_SHA256:
             raise ValueError('deja-vu二进制不是已核验的Windows v0.21.7版本')
-        result = subprocess.run([str(self.executable), *args], cwd=self.root, env=self.environment(), capture_output=True, timeout=120)
+        result = subprocess.run([str(self.executable), *args], cwd=self.root, env=self.environment(), capture_output=True,
+                                timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if result.returncode:
             raise RuntimeError(f'deja-vu {args[0]}失败，退出码{result.returncode}；未输出可能含原文的日志')
         return json.loads(result.stdout.decode('utf-8')) if '--json' in args else None
