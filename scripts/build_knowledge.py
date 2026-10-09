@@ -11,12 +11,47 @@ from pathlib import Path
 from urllib.parse import quote
 
 import httpx
+from tenacity import Retrying, retry_if_exception_type, wait_random_exponential
 
 from devrag.distill import Distiller
 from devrag.models import SECRET
 
 MODEL_SLOTS = threading.BoundedSemaphore(2)
 RUN_ABORT = threading.Event()
+RETRY_WAIT = wait_random_exponential(multiplier=15, min=10, max=120)
+
+
+class RecoverableStreamError(RuntimeError):
+    pass
+
+
+def transient_stream_error(error, stream):
+    if isinstance(error, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError)):
+        return True
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in {408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+    state = stream.state if stream else {}
+    if isinstance(error, json.JSONDecodeError) and state.get('invalid_event'):
+        return True
+    if str(error).startswith(('提炼流未完整结束', '提炼超过总时限')):
+        return True
+    provider = state.get('provider_error', '').lower()
+    if any(word in provider for word in ('invalid_api_key', 'authentication', 'permission', 'insufficient_quota',
+                                         'context_length', 'invalid_request')):
+        return False
+    return any(word in provider for word in ('upstream', 'http/2', 'stream failed', 'server_error', 'internal_error',
+                                             'rate_limit', 'temporarily', 'timeout', 'connection'))
+
+
+def wait_for_retry(seconds, stop_path):
+    deadline = time.monotonic() + seconds
+    while True:
+        if RUN_ABORT.is_set() or stop_path.exists():
+            raise InterruptedError('Generation stopped; completed batches preserved')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, 1))
 
 
 class ProgressStream:
@@ -106,7 +141,66 @@ def save_json(path, data):
     Path(handle.name).replace(path)
 
 
-def summarize(model, data, cache, allowed):
+def generate_summary(model, data, cache, pending, retry_transient):
+    stop_path = cache.parent.parent / 'STOP'
+    failures = []
+    payload = {'model': model.model, 'reasoning_effort': model.effort, 'stream': True,
+               'stream_options': {'include_usage': True},
+               'messages': [{'role': 'system', 'content': SYSTEM},
+                            {'role': 'user', 'content': json.dumps(data, ensure_ascii=False)}]}
+    url = model.base if model.base.endswith('/chat/completions') else model.base + '/chat/completions'
+
+    def before_sleep(attempt):
+        delay = round(attempt.next_action.sleep, 1)
+        save_json(pending, {'state': 'retrying', 'repository': data['repository']['name'],
+                            'attempt': attempt.attempt_number, 'retry_in_seconds': delay, 'failed_attempts': failures})
+        print(json.dumps({'event': 'retrying', 'repository': data['repository']['name'],
+                          'attempt': attempt.attempt_number, 'retry_in_seconds': delay,
+                          'error_type': failures[-1]['error_type']}), flush=True)
+
+    retrying = Retrying(retry=retry_if_exception_type(RecoverableStreamError), wait=RETRY_WAIT,
+                       before_sleep=before_sleep, sleep=lambda delay: wait_for_retry(delay, stop_path), reraise=True)
+    try:
+        for attempt in retrying:
+            with attempt:
+                wait_for_retry(0, stop_path)
+                number, usage, stream = attempt.retry_state.attempt_number, {}, None
+
+                def progress(values):
+                    save_json(pending, {'state': 'running', 'repository': data['repository']['name'],
+                                        'attempt': number, 'failed_attempts': failures, **values})
+
+                with MODEL_SLOTS:
+                    wait_for_retry(0, stop_path)
+                    progress({})
+                    try:
+                        with httpx.Client(proxy='http://127.0.0.1:7897', timeout=httpx.Timeout(180, connect=20), trust_env=False) as client:
+                            with client.stream('POST', url, headers={'Authorization': 'Bearer ' + model.key}, json=payload) as response:
+                                response.raise_for_status()
+                                stream = ProgressStream(response, progress)
+                                raw = model.read_stream(stream, usage.update, stop_path.exists)
+                    except Exception as exc:
+                        failure = {'attempt': number, 'error_type': type(exc).__name__,
+                                   'error': SECRET.sub('[REDACTED]', str(exc))[:500],
+                                   'status_code': getattr(getattr(exc, 'response', None), 'status_code', None),
+                                   'usage': usage, **(stream.state if stream else {})}
+                        failures.append(failure)
+                        save_json(pending, {'state': 'failed', **failure, 'failed_attempts': failures})
+                        if retry_transient and transient_stream_error(exc, stream):
+                            raise RecoverableStreamError(failure['error']) from exc
+                        if (isinstance(exc, httpx.RequestError)
+                                or (isinstance(exc, httpx.HTTPStatusError) and (exc.response.status_code >= 500
+                                                                              or exc.response.status_code in {401, 403}))
+                                or (stream and stream.state.get('provider_error'))):
+                            RUN_ABORT.set()
+                        raise
+                return raw, usage, number, failures
+    except InterruptedError:
+        save_json(pending, {'state': 'cancelled', 'failed_attempts': failures})
+        raise
+
+
+def summarize(model, data, cache, allowed, retry_transient=True):
     identity = json.dumps({'model': model.model, 'effort': model.effort, 'system': SYSTEM, 'data': data},
                           ensure_ascii=False, sort_keys=True)
     fingerprint = hashlib.sha256(identity.encode('utf-8')).hexdigest()
@@ -129,38 +223,8 @@ def summarize(model, data, cache, allowed):
             return saved
         except ValueError:
             pass
-    usage = {}
-    payload = {'model': model.model, 'reasoning_effort': model.effort, 'stream': True,
-               'stream_options': {'include_usage': True},
-               'messages': [{'role': 'system', 'content': SYSTEM},
-                            {'role': 'user', 'content': json.dumps(data, ensure_ascii=False)}]}
     started = time.monotonic()
-    url = model.base if model.base.endswith('/chat/completions') else model.base + '/chat/completions'
-    with MODEL_SLOTS:
-        if RUN_ABORT.is_set():
-            raise InterruptedError('Upstream failed earlier in this run; pending requests were not sent')
-        save_json(pending, {'state': 'running', 'repository': data['repository']['name']})
-
-        def progress(values):
-            save_json(pending, {'state': 'running', 'repository': data['repository']['name'], **values})
-
-        stream = None
-        try:
-            with httpx.Client(proxy='http://127.0.0.1:7897', timeout=httpx.Timeout(180, connect=20), trust_env=False) as client:
-                with client.stream('POST', url, headers={'Authorization': 'Bearer ' + model.key}, json=payload) as response:
-                    response.raise_for_status()
-                    stream = ProgressStream(response, progress)
-                    raw = model.read_stream(stream, usage.update, lambda: (cache.parent.parent / 'STOP').exists())
-        except Exception as exc:
-            if (isinstance(exc, httpx.RequestError)
-                    or (isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500)
-                    or (stream and stream.state.get('provider_error'))):
-                RUN_ABORT.set()
-            save_json(pending, {'state': 'failed', 'error_type': type(exc).__name__,
-                               'error': SECRET.sub('[REDACTED]', str(exc))[:500],
-                               'status_code': getattr(getattr(exc, 'response', None), 'status_code', None),
-                               'usage': usage, **(stream.state if stream else {})})
-            raise
+    raw, usage, attempts, failures = generate_summary(model, data, cache, pending, retry_transient)
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
     try:
         result = json.loads(raw)
@@ -171,9 +235,10 @@ def summarize(model, data, cache, allowed):
                            'error': SECRET.sub('[REDACTED]', str(exc))[:500], 'usage': usage})
         raise
     saved = {'markdown': result['markdown'], 'input_sha256': fingerprint, 'model': model.model,
-             'effort': model.effort, 'usage': usage, 'seconds': round(time.monotonic() - started, 1)}
+             'effort': model.effort, 'usage': usage, 'seconds': round(time.monotonic() - started, 1),
+             'attempts': attempts, 'failed_attempts': failures}
     save_json(path, saved)
-    save_json(pending, {'state': 'completed', 'seconds': saved['seconds']})
+    save_json(pending, {'state': 'completed', 'seconds': saved['seconds'], 'attempts': attempts, 'failed_attempts': failures})
     return saved
 
 

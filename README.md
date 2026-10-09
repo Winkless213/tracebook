@@ -13,7 +13,11 @@ npm --prefix scripts/knowledge ci --ignore-scripts --no-audit --no-fund
 python -m scripts.sync_github_knowledge --owner <GitHub账号> --state <独立同步目录> --output <知识目录> --proxy http://127.0.0.1:7897
 ```
 
-Git 凭据由本机 Credential Manager 提供，模型沿用 `DISTILL_*` 环境变量。`--watch` 在每轮结束后每5分钟重新核对GitHub；同一输入复用缓存。上游连接失败停止本轮新增请求；同一失败提交不在轮询中反复付费，排障后以 `--retry-failed` 明确续跑。默认分支浅检出不含全部Git历史或LFS大文件；本地副本存在改动或身份不符时停止，绝不覆盖开发工作树。
+Git 凭据由本机 Credential Manager 提供，模型沿用 `DISTILL_*` 环境变量。`--watch` 在每轮结束后每5分钟重新核对GitHub；同一输入复用缓存。默认分支浅检出不含全部Git历史或LFS大文件；本地副本存在改动或身份不符时停止，绝不覆盖开发工作树。
+
+代码归纳按 [HTTPX 官方建议](https://www.python-httpx.org/advanced/transports/)复用 [Tenacity 9.2.1](https://github.com/jd/tenacity)：连接中断、读超时、流未完整结束、临时上游错误以及 HTTP 429/524 等按10–120秒退避自动重试，直到成功或取消；已成功的批次直接读取缓存。每次请求重新读取完整响应，半截内容不拼入下一次结果。重试次数、错误及已报告用量保存在生成缓存；中断请求没有返回用量时不能视为零费用。
+
+在知识输出根目录创建 `STOP` 可停止等待和后续请求，当前请求在收到下一个流事件或网络超时后结束；移除 `STOP` 后原命令可续跑。鉴权、参数或来源引用错误不盲目重试，修正后用 `--retry-failed` 续跑同步器记录的失败提交。
 
 ```powershell
 python -m scripts.export_project_history --catalog <同步目录>/github-checkouts.json --deja <已核验deja.exe> --state <独立会话状态目录> --output <知识目录> --inventory-only

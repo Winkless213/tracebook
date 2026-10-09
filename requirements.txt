@@ -17,6 +17,7 @@ pydantic==2.14.0
 pydantic_core==2.50.0
 rank-bm25==0.2.2
 starlette==1.7.0
+tenacity==9.2.1
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 uvicorn==0.54.0
