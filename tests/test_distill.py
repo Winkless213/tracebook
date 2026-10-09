@@ -13,7 +13,7 @@ def result_for(records):
                          'finding': '当次端口占用', 'related_ids': []} for item in records], 'lessons': [], 'gaps': []}
 
 
-def test_streaming_uses_requested_model_budget_and_usage(tmp_path, monkeypatch):
+def test_streaming_uses_requested_model_without_manual_token_limit(tmp_path, monkeypatch):
     _, history, pid = setup_history(tmp_path)
     created = sync(history, pid, auto=True)
     records = [history.record(rid) for rid in history.job(created['job_id'])['record_ids']]
@@ -24,7 +24,8 @@ def test_streaming_uses_requested_model_budget_and_usage(tmp_path, monkeypatch):
     def response(request):
         body = json.loads(request.content)
         assert body['model'] == 'gpt-6-astra' and body['reasoning_effort'] == 'max'
-        assert body['stream'] and body['max_completion_tokens'] == 16384
+        assert body['stream']
+        assert 'max_completion_tokens' not in body and 'max_tokens' not in body
         chunks = [{'choices': [{'delta': {'content': json.dumps(result_for(records))}, 'finish_reason': None}]},
                   {'choices': [{'delta': {}, 'finish_reason': 'stop'}]},
                   {'choices': [], 'usage': {'prompt_tokens': 80, 'completion_tokens': 300}}]
@@ -39,7 +40,7 @@ def test_exhausted_reasoning_budget_cannot_complete_a_job(monkeypatch):
     monkeypatch.setenv('DISTILL_API_KEY', 'local-test-key')
     monkeypatch.setenv('DISTILL_BASE_URL', 'https://example.invalid/v1')
     model = Distiller(transport=httpx.MockTransport(lambda _: httpx.Response(200, text='data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n')))
-    with pytest.raises(RuntimeError, match='额度'):
+    with pytest.raises(RuntimeError, match='截断'):
         model.distill([], lambda _: None, lambda: False)
 
 

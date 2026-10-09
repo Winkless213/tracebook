@@ -95,7 +95,7 @@ class LLM:
             try:
                 with httpx.Client(timeout=httpx.Timeout(self.timeout, connect=10), follow_redirects=False) as client:
                     response = client.post(url, headers={'Authorization': 'Bearer ' + self.key}, json={
-                        'model': model, 'messages': messages, 'temperature': 0.1, 'max_tokens': 4800})
+                        'model': model, 'messages': messages, 'temperature': 0.1})
                 response.raise_for_status()
                 payload = response.json()
                 raw = payload.get('usage') or {}
@@ -138,14 +138,14 @@ class LLM:
             url = self.base if self.base.endswith('/chat/completions') else self.base + '/chat/completions'
             with httpx.Client(timeout=httpx.Timeout(self.timeout, connect=10), follow_redirects=False) as client:
                 response = client.post(url, headers={'Authorization': 'Bearer ' + self.key}, json={'model': model, 'temperature': 0,
-                    'max_tokens': 16384, 'reasoning_effort': 'low', 'messages': [{'role': 'system', 'content': REVIEW_SYSTEM},
+                    'reasoning_effort': 'low', 'messages': [{'role': 'system', 'content': REVIEW_SYSTEM},
                     {'role': 'user', 'content': json.dumps({'question': question, 'sources': sources, 'candidate': candidate}, ensure_ascii=False)}]})
             response.raise_for_status()
             payload = response.json()
             raw = payload.get('usage') or {}
             usage = {'input_tokens': raw.get('prompt_tokens'), 'output_tokens': raw.get('completion_tokens')}
             if payload['choices'][0].get('finish_reason') == 'length':
-                raise ReviewFailure('依据核验输出额度耗尽，未采纳结果；请检查核验模型配置')
+                raise ReviewFailure('模型服务因输出长度限制截断了核验，未采纳不完整结果')
             content = re.sub(r'^```(?:json)?\s*|\s*```$', '', payload['choices'][0]['message']['content'].strip())
             verdict = GroundingReview.model_validate_json(content)
             record(model + ' / 依据核验', identifier, 'completed' if verdict.supported else 'rejected', round((time.monotonic() - started) * 1000), usage,

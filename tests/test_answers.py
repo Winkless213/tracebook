@@ -94,6 +94,7 @@ def test_llm_primary_bad_json_falls_back_with_accounting(monkeypatch):
 
     def post(self, url, **kwargs):
         assert url.endswith('/v1/chat/completions')
+        assert 'max_tokens' not in kwargs['json'] and 'max_completion_tokens' not in kwargs['json']
         calls.append(kwargs['json']['model'])
         text = 'bad json' if len(calls) == 1 else '{"status":"insufficient","summary":"资料不足","claims":[],"gaps":["缺少资料"]}'
         if len(calls) == 3:
@@ -149,5 +150,5 @@ def test_review_length_limit_cannot_accept_partial_verdict(monkeypatch):
         return httpx.Response(200, request=httpx.Request('POST', url), json={
             'choices': [{'message': {'content': '{"supported":true,"issues":[]}'}, 'finish_reason': 'length'}]})
     monkeypatch.setattr(httpx.Client, 'post', post)
-    with pytest.raises(RuntimeError, match='额度'):
+    with pytest.raises(RuntimeError, match='截断'):
         LLM().review('问题', [], {}, lambda *args: 1, lambda: False)

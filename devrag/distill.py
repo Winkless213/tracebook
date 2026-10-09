@@ -27,7 +27,6 @@ class Distiller:
         self.key = os.getenv('DISTILL_API_KEY', '')
         self.model = os.getenv('DISTILL_MODEL', 'gpt-6-astra')
         self.effort = os.getenv('DISTILL_REASONING_EFFORT', 'max')
-        self.budget = int(os.getenv('DISTILL_MAX_COMPLETION_TOKENS', '16384'))
         self.timeout = float(os.getenv('DISTILL_TIMEOUT', '240'))
         self.transport = transport
 
@@ -41,7 +40,7 @@ class Distiller:
             raise RuntimeError('服务器尚未配置提炼模型')
         url = self.base if self.base.endswith('/chat/completions') else self.base + '/chat/completions'
         payload = {'model': self.model, 'reasoning_effort': self.effort, 'stream': True,
-                   'stream_options': {'include_usage': True}, 'max_completion_tokens': self.budget,
+                   'stream_options': {'include_usage': True},
                    'messages': [{'role': 'system', 'content': SYSTEM + json.dumps(Distillation.model_json_schema(), ensure_ascii=False)},
                                 {'role': 'user', 'content': json.dumps({'records': records}, ensure_ascii=False)}]}
         try:
@@ -84,7 +83,7 @@ class Distiller:
             if len(content) > 200000:
                 raise RuntimeError('提炼输出超过上限，未采纳结果')
         if finish == 'length':
-            raise RuntimeError('提炼输出额度耗尽，未获得完整结果；可减少输入后重试')
+            raise RuntimeError('模型服务因输出长度限制截断了提炼，未采纳不完整结果')
         if finish != 'stop' or not content.strip():
             raise RuntimeError('提炼流未完整结束，未采纳部分结果')
         return content
