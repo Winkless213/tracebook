@@ -99,15 +99,40 @@ def checkout(repo, owner, root, proxy):
     return result
 
 
-def cycle(args):
-    RUN_ABORT.clear()
-    inventory = discover(args.owner, args.proxy)
-    save_json(args.state / 'github-repositories.json', inventory)
+def refresh_sources(owner, repositories, packs, catalog, inventory_path, proxy=None):
+    inventory = discover(owner, proxy)
+    inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    catalog.parent.mkdir(parents=True, exist_ok=True)
+    save_json(inventory_path, inventory)
+    previous = json.loads(catalog.read_text(encoding='utf-8'))['repositories'] if catalog.is_file() else []
+    prior = {row['name']: row for row in previous}
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        repos = list(pool.map(lambda row: checkout(row, args.owner, args.state / 'repositories', args.proxy), inventory['repositories']))
-    catalog = args.state / 'github-checkouts.json'
+        current = list(pool.map(lambda row: checkout(row, owner, repositories, proxy), inventory['repositories']))
+    repos, checked = [], datetime.now(timezone.utc).isoformat()
+    for row in current:
+        if row['status'] == 'failed' and prior.get(row['name'], {}).get('status') == 'verified':
+            row = {**prior[row['name']], 'sync_status': 'failed', 'sync_error': row['error'], 'sync_checked_at': checked}
+        else:
+            row = {**row, 'sync_status': 'ok' if row['status'] == 'verified' else 'failed', 'sync_checked_at': checked}
+        repos.append(row)
+    found = {row['name'] for row in repos}
+    repos.extend({**row, 'sync_status': 'not_listed', 'sync_checked_at': checked}
+                 for row in previous if row['name'] not in found)
     save_json(catalog, {**inventory, 'repositories': repos})
-    subprocess.run(['node', str(Path(__file__).parent / 'knowledge/pack-projects.mjs'), str(catalog), str(args.state / 'packs')], check=True)
+    subprocess.run(['node', str(Path(__file__).parent / 'knowledge/pack-projects.mjs'), str(catalog), str(packs)], check=True)
+    return repos
+
+
+def cycle(args):
+    args.output.mkdir(parents=True, exist_ok=True)
+    with FileLock(args.output / 'generation-run.lock', timeout=0):
+        return generation_cycle(args)
+
+
+def generation_cycle(args):
+    RUN_ABORT.clear()
+    repos = refresh_sources(args.owner, args.state / 'repositories', args.state / 'packs',
+                            args.state / 'github-checkouts.json', args.state / 'github-repositories.json', args.proxy)
     write_index(repos, args.output)
     published = json.loads((args.output / 'catalog.json').read_text(encoding='utf-8'))['projects']
     ready = {row['name'] for row in published if row['status'] == 'ready'}

@@ -53,7 +53,21 @@ chown -R 10001:10001 /opt/devrag/restore-<timestamp>
 
 - 项目知识单独发布到 `/opt/devrag/data/developer-knowledge`，只包含 catalog、入口、已完成 Markdown 与来源清单；生成缓存、原始检出和会话全文不进入服务包。
 - 发布后认证读取 `/api/developer-knowledge`，核对项目数量、完成状态和 Markdown 哈希，再用真实浏览器核验默认概览。旧问答评测不能证明项目知识主路径完成。
-- 批量模型出现上游 HTTP 5xx、连接中断或流内错误时，本轮停止新增付费请求，保留完整批次缓存；未完成项目仍是未完成，不能因为进程结束就标记可用。
+- `scripts/run_developer_knowledge.py --watch` 是代码、会话分类与经验归纳的唯一执行器。每次只处理一个模型批次；两次临时失败后让出队列，下轮仍可重试，不设总重试额度。认证或证据校验失败记为 `needs_fix`，输入未变化时不盲目重复付费。完整批次缓存保留，未完成的流不采纳。
+
+## 持续同步与知识版本
+
+本机执行器通过 `--owner`、`--repositories`、`--inventory`、`--deja`、`--history-state` 接入 GitHub 和两端会话目录，默认在批次之间每300秒检查变化。`--prioritize` 只排序；`--project` 会限制项目范围，全部项目同步时不得用它维护静态名单。只有独立源码副本可以fetch，开发工作树和原始会话保持只读。来源目录不可读取时保留上次核验结果，不能当成“没有会话”。
+
+未变化的会话命中 `.export-cache`，相同模型输入的批次可跨提交复用；来源变化后撤销相关完成状态。代码、主题和经验分别核对提交、来源快照与 Markdown 哈希；没有关联来源标为 `no_sources`，不能算作经验归纳成功。只清点或只同步部分项目不得改写其他项目的有效来源清单。
+
+`--publish-host`、`--publication-state`、`--publication-url` 启用完整快照发布。`scripts/package_knowledge.py` 只打包 catalog 中可用的文件，`scripts/install_knowledge.py` 校验包与旧 catalog 后切换 `/opt/devrag/data/developer-knowledge` 指针，旧版本留在 `knowledge-releases`。同提交既有代码不得被替换或丢弃，项目不得被意外删除。首次将旧目录迁为版本指针时保留旧目录；之后通过符号链接原子替换。
+
+认证 API 逐份回读 Markdown 哈希、确认匿名401及中间文件404后，才更新本机发布状态；内容未变不重复上传，每300秒仍可重新回读。运行中的 API 每次请求解析当前指针，不能缓存旧版本路径。助手从本机 `INDEX.md`、`catalog.json` 选取当前文件；保留在目录中的旧 Markdown 不代表当前可用。
+
+在知识目录创建 `STOP` 可正常停止执行器并保留批次；恢复前核对实际 PID 和 generation lock，再移除自己创建的标记。后台日志、登录恢复和 SSH 转发由本机原生任务计划管理，不创建 PowerShell 脚本或额外 Codex automation。
+
+## 应用验收
 
 - Git和包身份一致，独立配置与数据路径明确。
 - 候选API、认证、导入检索通过，正式镜像/进程release一致。
