@@ -4,6 +4,7 @@ import concurrent.futures
 import hashlib
 import json
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -11,9 +12,11 @@ from pathlib import Path
 from urllib.parse import quote
 
 import httpx
-from tenacity import Retrying, retry_if_exception_type, wait_random_exponential
+from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, stop_never, wait_random_exponential
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from devrag.distill import Distiller
+from devrag.knowledge_status import project_status
 from devrag.models import SECRET
 
 MODEL_SLOTS = threading.BoundedSemaphore(2)
@@ -22,6 +25,10 @@ RETRY_WAIT = wait_random_exponential(multiplier=15, min=10, max=120)
 
 
 class RecoverableStreamError(RuntimeError):
+    pass
+
+
+class GenerationPending(RuntimeError):
     pass
 
 
@@ -141,12 +148,39 @@ def save_json(path, data):
     Path(handle.name).replace(path)
 
 
-def generate_summary(model, data, cache, pending, retry_transient):
+def cache_input(model, data, cache, system):
+    # 提交身份由发布文件绑定；相同源码输入不因一次无关提交重新计费。
+    normalized = {**data, 'repository': {key: value for key, value in data['repository'].items() if key != 'commit'}}
+
+    def checksum(payload):
+        identity = json.dumps({'model': model.model, 'effort': model.effort, 'system': system, 'data': payload},
+                              ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(identity.encode('utf-8')).hexdigest()
+
+    fingerprint, legacy = checksum(normalized), checksum(data)
+    path = cache / (fingerprint + '.json')
+    for candidate in dict.fromkeys([path, cache / (legacy + '.json')]):
+        if not candidate.is_file():
+            continue
+        saved = json.loads(candidate.read_text(encoding='utf-8'))
+        commit = saved.get('generation_commit', data['repository'].get('commit'))
+        if commit and commit != data['repository'].get('commit') and commit in json.dumps(
+                saved.get('markdown', saved.get('result')), ensure_ascii=False):
+            continue
+        saved.update(cache_key_sha256=fingerprint)
+        saved.setdefault('generation_commit', commit)
+        return normalized, fingerprint, path, saved
+    return normalized, fingerprint, path, None
+
+
+def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM):
+    if getattr(model, 'yield_between_batches', False) and getattr(model, 'generated_in_pass', False):
+        raise GenerationPending('Completed batch preserved; next batch remains queued')
     stop_path = cache.parent.parent / 'STOP'
     failures = []
     payload = {'model': model.model, 'reasoning_effort': model.effort, 'stream': True,
                'stream_options': {'include_usage': True},
-               'messages': [{'role': 'system', 'content': SYSTEM},
+               'messages': [{'role': 'system', 'content': system},
                             {'role': 'user', 'content': json.dumps(data, ensure_ascii=False)}]}
     url = model.base if model.base.endswith('/chat/completions') else model.base + '/chat/completions'
 
@@ -159,12 +193,14 @@ def generate_summary(model, data, cache, pending, retry_transient):
                           'error_type': failures[-1]['error_type']}), flush=True)
 
     retrying = Retrying(retry=retry_if_exception_type(RecoverableStreamError), wait=RETRY_WAIT,
+                       stop=stop_after_attempt(2) if getattr(model, 'yield_between_batches', False) else stop_never,
                        before_sleep=before_sleep, sleep=lambda delay: wait_for_retry(delay, stop_path), reraise=True)
     try:
         for attempt in retrying:
             with attempt:
                 wait_for_retry(0, stop_path)
                 number, usage, stream = attempt.retry_state.attempt_number, {}, None
+                attempt_started = time.monotonic()
 
                 def progress(values):
                     save_json(pending, {'state': 'running', 'repository': data['repository']['name'],
@@ -172,6 +208,7 @@ def generate_summary(model, data, cache, pending, retry_transient):
 
                 with MODEL_SLOTS:
                     wait_for_retry(0, stop_path)
+                    model.generated_in_pass = True
                     progress({})
                     try:
                         with httpx.Client(proxy='http://127.0.0.1:7897', timeout=httpx.Timeout(180, connect=20), trust_env=False) as client:
@@ -181,6 +218,7 @@ def generate_summary(model, data, cache, pending, retry_transient):
                                 raw = model.read_stream(stream, usage.update, stop_path.exists)
                     except Exception as exc:
                         failure = {'attempt': number, 'error_type': type(exc).__name__,
+                                   'elapsed_seconds': round(time.monotonic() - attempt_started, 2),
                                    'error': SECRET.sub('[REDACTED]', str(exc))[:500],
                                    'status_code': getattr(getattr(exc, 'response', None), 'status_code', None),
                                    'usage': usage, **(stream.state if stream else {})}
@@ -201,23 +239,22 @@ def generate_summary(model, data, cache, pending, retry_transient):
 
 
 def summarize(model, data, cache, allowed, retry_transient=True):
-    identity = json.dumps({'model': model.model, 'effort': model.effort, 'system': SYSTEM, 'data': data},
-                          ensure_ascii=False, sort_keys=True)
-    fingerprint = hashlib.sha256(identity.encode('utf-8')).hexdigest()
-    path = cache / (fingerprint + '.json')
+    original_commit = data['repository'].get('commit')
+    data, fingerprint, path, saved = cache_input(model, data, cache, SYSTEM)
     pending = cache / (fingerprint + '.progress.json')
-    if path.exists():
-        saved = json.loads(path.read_text(encoding='utf-8'))
+    if saved:
         saved['markdown'] = validate_result(saved, allowed)
+        save_json(path, saved)
         save_json(pending, {'state': 'completed', 'cached': True})
-        return saved
+        return {**saved, 'reused': True}
     rejected = cache / (fingerprint + '.rejected.json')
     if rejected.exists():
         previous = json.loads(rejected.read_text(encoding='utf-8'))
         try:
             markdown = validate_result(json.loads(previous['raw']), allowed)
             saved = {'markdown': markdown, 'input_sha256': fingerprint, 'model': model.model,
-                     'effort': model.effort, 'usage': previous['usage'], 'seconds': None, 'recovered_from': rejected.name}
+                     'effort': model.effort, 'usage': previous['usage'], 'seconds': None, 'recovered_from': rejected.name,
+                     'generation_commit': original_commit, 'cache_key_sha256': fingerprint}
             save_json(path, saved)
             save_json(pending, {'state': 'completed', 'cached': True, 'recovered': True})
             return saved
@@ -236,15 +273,17 @@ def summarize(model, data, cache, allowed, retry_transient=True):
         raise
     saved = {'markdown': result['markdown'], 'input_sha256': fingerprint, 'model': model.model,
              'effort': model.effort, 'usage': usage, 'seconds': round(time.monotonic() - started, 1),
-             'attempts': attempts, 'failed_attempts': failures}
+             'attempts': attempts, 'failed_attempts': failures,
+             'generation_commit': original_commit, 'cache_key_sha256': fingerprint}
     save_json(path, saved)
     save_json(pending, {'state': 'completed', 'seconds': saved['seconds'], 'attempts': attempts, 'failed_attempts': failures})
     return saved
 
 
-def build(repo, packs, output):
+def build(repo, packs, output, one_batch=False):
     model = Distiller()
     model.timeout = 900
+    model.yield_between_batches = one_batch
     if not model.configured:
         raise RuntimeError('Strong model is not configured')
     pack = packs / repo['name'] / repo['commit']
@@ -286,9 +325,14 @@ def build(repo, packs, output):
     report = {**identity, 'model': model.model, 'effort': model.effort, 'input_files': len(files),
               'batches': len(batches), 'all_batches_completed': True, 'tracked_files': repo['tracked_files'],
               'model_usage': [note['usage'] for note in notes] + ([] if len(notes) == 1 else [result['usage']]),
+              'model_runs': [{key: note.get(key) for key in ['input_sha256', 'generation_commit', 'cache_key_sha256', 'reused']}
+                             for note in notes] + ([] if len(notes) == 1 else [{key: result.get(key) for key in
+                                 ['input_sha256', 'generation_commit', 'cache_key_sha256', 'reused']}]),
               'source_paths': sorted(files), 'security_excluded': metrics['securityExcluded'],
               'not_packed': metrics.get('notPacked', []),
               'codebase_sha256': hashlib.sha256((target / 'CODEBASE.md').read_bytes()).hexdigest()}
+    if len(notes) > 1:
+        report['modules_sha256'] = hashlib.sha256((target / 'MODULES.md').read_bytes()).hexdigest()
     save_json(target / 'provenance.json', report)
     print(json.dumps({'event': 'completed', 'repository': repo['name'], 'files': len(files), 'batches': len(batches)}), flush=True)
     return report
@@ -302,28 +346,28 @@ def write_index(repos, output):
              '2. 按任务读取 MODULES.md 的相关部分，再打开引用的源码；不要一次加载所有项目。',
              '3. 对照知识文件的 commit 与当前工作区；版本不一致时重新核对相关代码。',
              '4. 这些文件来自代码静态归纳，不能证明测试通过或线上状态；未关联的会话不能当作该项目历史。', '',
-             '| GitHub 仓库 | 默认分支 | 已拉取提交 | Markdown 状态 |',
-             '|---|---|---|---|']
+             '5. 接续历史任务时，按需读 SESSIONS.md 与 SESSION-TOPICS.md；历史决定、候选经验与未决问题分别使用。', '',
+             '| GitHub 仓库 | 默认分支 | 已拉取提交 | 代码知识 | 会话知识 |',
+             '|---|---|---|---|---|']
     completed, projects = 0, []
     for repo in repos:
-        provenance = output / repo['name'] / 'provenance.json'
         status = '待强模型归纳'
         entry = {key: repo.get(key) for key in ['name', 'url', 'branch', 'commit']}
-        available = repo.get('status') == 'verified'
-        entry.update(status='pending' if available else 'unavailable', documents=[], input_files=0)
-        if not available:
+        entry.update(project_status(repo, output / repo['name']))
+        if repo.get('sync_status'):
+            entry['sync_status'] = repo['sync_status']
+        if entry['status'] == 'unavailable':
             status = '代码读取失败，需检查来源'
-        if available and provenance.exists():
-            result = json.loads(provenance.read_text(encoding='utf-8'))
-            document = output / repo['name'] / 'CODEBASE.md'
-            if (result['commit'] == repo['commit'] and result['all_batches_completed'] and document.exists()
-                    and hashlib.sha256(document.read_bytes()).hexdigest() == result['codebase_sha256']):
-                completed += 1
-                status = f'[{result["input_files"]} 个文本文件已归纳]({quote(repo["name"])}/CODEBASE.md)'
-                entry.update(status='ready', input_files=result['input_files'],
-                             documents=[name for name in ['CODEBASE.md', 'MODULES.md'] if (document.parent / name).is_file()])
+        if entry['status'] == 'ready':
+            completed += 1
+            status = f'[{entry["input_files"]} 个文本文件已归纳]({quote(repo["name"])}/CODEBASE.md)'
+        history = {'no_sources': '暂无已关联来源', 'pending': f'{entry["history_sessions"]} 份来源待归纳',
+                   'reviewed': f'已分析 {entry["history_sessions"]} 份，暂无可复用经验',
+                   'ready': f'[{entry["history_sessions"]} 份会话 · {entry["history_items"]} 条经验]({quote(repo["name"])}/SESSIONS.md)'}[entry['history_status']]
+        if entry['topics_status'] == 'ready':
+            history += f' · [主题]({quote(repo["name"])}/SESSION-TOPICS.md)'
         projects.append(entry)
-        lines.append(f'| [{repo["name"]}]({repo["url"].removesuffix(".git")}) | `{repo["branch"]}` | `{(repo.get("commit") or "未核验")[:12]}` | {status} |')
+        lines.append(f'| [{repo["name"]}]({repo["url"].removesuffix(".git")}) | `{repo["branch"]}` | `{(repo.get("commit") or "未核验")[:12]}` | {status} | {history} |')
     pulled = sum(repo.get('status') == 'verified' for repo in repos)
     lines += ['', f'当前：{len(repos)} 个仓库已发现，{pulled} 个已拉取；{completed} 个项目 Markdown 已生成并通过来源检查。', '',
               '处理方式：[Repomix 1.18.1](https://github.com/yamadashy/repomix) 进行代码整理和敏感信息检查，'
@@ -339,6 +383,7 @@ def main():
     parser.add_argument('--packs', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--project', action='append')
+    parser.add_argument('--workers', type=int, choices=[1, 2], default=2)
     args = parser.parse_args()
     catalog = json.loads(args.catalog.read_text(encoding='utf-8'))['repositories']
     write_index(catalog, args.output)
@@ -346,7 +391,7 @@ def main():
     if args.project:
         repos.sort(key=lambda repo: args.project.index(repo['name']))
     failed = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
         jobs = {pool.submit(build, repo, args.packs, args.output): repo['name'] for repo in repos}
         for job in concurrent.futures.as_completed(jobs):
             try:

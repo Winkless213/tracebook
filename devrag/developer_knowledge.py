@@ -2,25 +2,33 @@
 import json
 from pathlib import Path
 
+from .knowledge_status import DOCUMENT_STAGES
+
 
 class KnowledgeFiles:
     def __init__(self, root):
-        self.root = Path(root).resolve()
+        self.root = Path(root).absolute()
 
-    def catalog(self):
-        path = self.root / 'catalog.json'
+    def catalog(self, root=None):
+        path = (root or self.root.resolve()) / 'catalog.json'
         if not path.is_file():
             return {'projects': [], 'ready': 0}
         data = json.loads(path.read_text(encoding='utf-8'))
-        return {'projects': data['projects'], 'ready': sum(project['status'] == 'ready' for project in data['projects'])}
+        projects = data['projects']
+        return {'projects': projects, 'ready': sum(project['status'] == 'ready' for project in projects),
+                'topics_ready': sum(project.get('topics_status') == 'ready' for project in projects),
+                'history_ready': sum(project.get('history_status') == 'ready' for project in projects)}
 
     def document(self, project, name):
-        if name not in {'CODEBASE.md', 'MODULES.md'}:
+        if name not in DOCUMENT_STAGES:
             raise KeyError(name)
-        entry = next((item for item in self.catalog()['projects'] if item['name'] == project), None)
-        if not entry or entry['status'] != 'ready' or name not in entry['documents']:
+        root = self.root.resolve()
+        entry = next((item for item in self.catalog(root)['projects'] if item['name'] == project), None)
+        stage = DOCUMENT_STAGES[name]
+        status = entry.get('status' if stage == 'code' else stage + '_status') if entry else None
+        if not entry or status not in {'ready', 'reviewed'} or name not in entry['documents']:
             raise KeyError(project)
-        path = (self.root / project / name).resolve()
-        if not path.is_relative_to(self.root) or not path.is_file():
+        path = (root / project / name).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
             raise KeyError(project)
         return path

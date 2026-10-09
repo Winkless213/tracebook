@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import httpx
@@ -5,7 +6,7 @@ import pytest
 
 from devrag.distill import Distiller
 from scripts import build_knowledge
-from scripts.build_knowledge import RUN_ABORT, make_batches, process_batches, summarize, validate_result, write_index
+from scripts.build_knowledge import RUN_ABORT, GenerationPending, make_batches, process_batches, summarize, validate_result, write_index
 
 
 @pytest.fixture(autouse=True)
@@ -89,6 +90,30 @@ def test_failed_checkout_is_visible_without_claiming_code_was_pulled(tmp_path):
     assert row['status'] == 'unavailable'
     assert row['commit'] is None
     assert row['documents'] == []
+
+
+def test_index_exposes_completed_topics_and_revokes_them_on_source_change(tmp_path):
+    project = tmp_path / 'example'
+    (project / 'history').mkdir(parents=True)
+    source = project / 'history/session.json'
+    source.write_text(json.dumps({'session': {'id': 'session'}, 'source_sha256': 'old'}), encoding='utf-8')
+    document = project / 'SESSION-TOPICS.md'
+    document.write_text('# Topics', encoding='utf-8')
+    (project / 'session-topics.json').write_text(json.dumps({
+        'source_commit_for_topic_context': 'head', 'all_sessions_classified': True,
+        'sessions': [{'id': 'session', 'source_sha256': 'old', 'complete': True}],
+        'markdown_sha256': hashlib.sha256(document.read_bytes()).hexdigest()}), encoding='utf-8')
+    repo = {'name': 'example', 'url': 'https://github.com/owner/example.git', 'branch': 'main',
+            'commit': 'head', 'status': 'verified'}
+    write_index([repo], tmp_path)
+    row = json.loads((tmp_path / 'catalog.json').read_text(encoding='utf-8'))['projects'][0]
+    assert row['status'] == 'pending' and row['topics_status'] == 'ready'
+    assert row['history_status'] == 'pending' and row['history_sessions'] == 1
+    assert row['documents'] == ['SESSION-TOPICS.md']
+    source.write_text(json.dumps({'session': {'id': 'session'}, 'source_sha256': 'new'}), encoding='utf-8')
+    write_index([repo], tmp_path)
+    row = json.loads((tmp_path / 'catalog.json').read_text(encoding='utf-8'))['projects'][0]
+    assert row['topics_status'] == 'pending' and row['documents'] == []
 
 
 def test_upstream_failure_does_not_launch_remaining_paid_batches():
@@ -238,3 +263,73 @@ def test_cancellation_during_backoff_does_not_send_another_request(tmp_path, mon
     progress = json.loads(next(cache.glob('*.progress.json')).read_text(encoding='utf-8'))
     assert progress['state'] == 'cancelled'
     assert len(progress['failed_attempts']) == 1
+
+
+def test_queued_generation_yields_between_new_batches_but_still_reads_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    client, calls = httpx.Client, []
+
+    def respond(request):
+        calls.append(request)
+        event = {'choices': [{'delta': {'content': json.dumps({'markdown': 'Entry [[app.py]]'})}, 'finish_reason': 'stop'}]}
+        return httpx.Response(200, text='data: ' + json.dumps(event) + '\n\ndata: [DONE]\n\n', request=request)
+
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: client(transport=httpx.MockTransport(respond)))
+    model = Distiller()
+    model.yield_between_batches = True
+    first = {'repository': {'name': 'example'}, 'files': ['first']}
+    second = {'repository': {'name': 'example'}, 'files': ['second']}
+    summarize(model, first, tmp_path, {'app.py'})
+    assert summarize(model, first, tmp_path, {'app.py'})['markdown'] == 'Entry [[app.py]]'
+    with pytest.raises(GenerationPending):
+        summarize(model, second, tmp_path, {'app.py'})
+    assert len(calls) == 1
+    resumed = Distiller()
+    resumed.yield_between_batches = True
+    summarize(resumed, second, tmp_path, {'app.py'})
+    assert len(calls) == 2
+
+
+def test_temporary_failure_yields_to_other_jobs_and_can_retry_in_the_next_round(tmp_path, monkeypatch):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    client, calls = httpx.Client, []
+
+    def respond(request):
+        calls.append(request)
+        if len(calls) <= 2:
+            raise httpx.ReadTimeout('temporary upstream failure')
+        event = {'choices': [{'delta': {'content': json.dumps({'markdown': 'Entry [[app.py]]'})}, 'finish_reason': 'stop'}]}
+        return httpx.Response(200, text='data: ' + json.dumps(event) + '\n\ndata: [DONE]\n\n', request=request)
+
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: client(transport=httpx.MockTransport(respond)))
+    model = Distiller()
+    model.yield_between_batches = True
+    with pytest.raises(build_knowledge.RecoverableStreamError):
+        summarize(model, {'repository': {'name': 'example'}}, tmp_path, {'app.py'})
+    assert not RUN_ABORT.is_set()
+    resumed = Distiller()
+    resumed.yield_between_batches = True
+    assert summarize(resumed, {'repository': {'name': 'example'}}, tmp_path, {'app.py'})['attempts'] == 1
+    assert len(calls) == 3
+
+
+def test_unchanged_source_batch_is_reused_on_new_commit_and_changed_content_generates_again(tmp_path, monkeypatch):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    client, calls = httpx.Client, []
+
+    def respond(request):
+        calls.append(request)
+        event = {'choices': [{'delta': {'content': json.dumps({'markdown': 'Entry [[app.py]]'})}, 'finish_reason': 'stop'}]}
+        return httpx.Response(200, text='data: ' + json.dumps(event) + '\n\ndata: [DONE]\n\n', request=request)
+
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: client(transport=httpx.MockTransport(respond)))
+    first = {'repository': {'name': 'example', 'commit': 'old'}, 'files': [{'path': 'app.py', 'content': 'original'}]}
+    summarize(Distiller(), first, tmp_path, {'app.py'})
+    newer = {**first, 'repository': {'name': 'example', 'commit': 'new'}}
+    summarize(Distiller(), newer, tmp_path, {'app.py'})
+    assert len(calls) == 1
+    summarize(Distiller(), {**newer, 'files': [{'path': 'app.py', 'content': 'changed'}]}, tmp_path, {'app.py'})
+    assert len(calls) == 2

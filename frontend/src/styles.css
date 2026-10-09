@@ -667,6 +667,7 @@ button, p, h1, h2, h3, dd, blockquote { overflow-wrap: anywhere; }
 .knowledge-state.ready { background: #e7f0e7; color: #356344; }
 .knowledge-branch { color: #89918a; font-size: 12px; overflow-wrap: anywhere; margin: 5px 0 20px; }
 .knowledge-project-description { font-size: 13px; color: #617168; line-height: 1.7; margin: 0; }
+.knowledge-history { margin-top: 7px; }
 .knowledge-details { font-size: 12px; margin-top: 15px; }
 .knowledge-details summary { cursor: pointer; padding: 9px 0; color: #356344; }
 .knowledge-details a { padding: 10px 0; display: flex; justify-content: space-between; text-decoration: none; border-top: 1px solid #eef0eb; color: #356344; }
