@@ -5,6 +5,7 @@ from functools import lru_cache
 
 DOCUMENT_STAGES = {'CODEBASE.md': 'code', 'MODULES.md': 'code',
                    'SESSION-TOPICS.md': 'topics', 'SESSIONS.md': 'history'}
+HISTORY_EVIDENCE_POLICY = 'direct-user-v1'
 
 
 def read_json(path):
@@ -63,7 +64,8 @@ def stage_ready(repo, target, stage, snapshots=None):
                     and all(row.get('complete') for row in proof.get('sessions', []))
                     and matches(target / 'SESSION-TOPICS.md', proof.get('markdown_sha256')))
     proof = read_json(target / 'history-provenance.json')
-    return bool(proof.get('all_selected_batches_completed') and proof.get('commit') == repo.get('commit')
+    return bool(proof.get('all_selected_batches_completed') and proof.get('evidence_policy') == HISTORY_EVIDENCE_POLICY
+                and proof.get('commit') == repo.get('commit')
                 and proof.get('source_snapshots') == snapshots and stage_ready(repo, target, 'topics', snapshots)
                 and matches(target / 'SESSIONS.md', proof.get('sessions_sha256'))
                 and matches(target / 'SESSION-TOPICS.md', proof.get('topics_sha256')))

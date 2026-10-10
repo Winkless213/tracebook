@@ -4,6 +4,7 @@ import tarfile
 
 import pytest
 
+from devrag.knowledge_status import HISTORY_EVIDENCE_POLICY
 from scripts.package_knowledge import package
 
 
@@ -43,6 +44,7 @@ def test_publish_history_while_code_generation_is_pending(tmp_path):
         'markdown_sha256': hashlib.sha256(topics).hexdigest()}), encoding='utf-8')
     (project / 'history-provenance.json').write_text(json.dumps({
         'commit': 'abc', 'all_selected_batches_completed': True, 'items': 1,
+        'evidence_policy': HISTORY_EVIDENCE_POLICY,
         'source_snapshots': {'session': 'source'}, 'sessions_sha256': hashlib.sha256(lessons).hexdigest(),
         'topics_sha256': hashlib.sha256(topics).hexdigest()}), encoding='utf-8')
     (knowledge / 'INDEX.md').write_text('# Index', encoding='utf-8')

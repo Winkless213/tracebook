@@ -12,7 +12,7 @@ from rank_bm25 import BM25Okapi
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from devrag.distill import Distiller
 from devrag.indexing import split_file
-from devrag.knowledge_status import history_sources
+from devrag.knowledge_status import HISTORY_EVIDENCE_POLICY, history_sources
 from devrag.models import SECRET
 from devrag.retrieval import tokenize
 from scripts.build_knowledge import model_labels, process_batches, save_json
@@ -164,6 +164,7 @@ def publish(repo, records, coverage, results, runs, skipped, target):
     document = target / 'SESSIONS.md'
     document.write_text('\n'.join(lines), encoding='utf-8')
     save_json(target / 'history-provenance.json', {'commit': repo['commit'], 'all_selected_batches_completed': True,
+        'evidence_policy': HISTORY_EVIDENCE_POLICY,
         'sessions': len(coverage), 'selected_records': len(records), 'items': len(items),
         'source_snapshots': {row['session']: row['source_sha256'] for row in coverage},
         'sessions_sha256': hashlib.sha256(document.read_bytes()).hexdigest(),

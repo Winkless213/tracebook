@@ -4,6 +4,7 @@ import threading
 import pytest
 
 from devrag import distill as distill_module
+from devrag.knowledge_status import stage_ready
 from scripts import classify_project_history as topics
 from scripts import distill_project_history as lessons
 from scripts import history_knowledge
@@ -164,3 +165,21 @@ def test_slow_complete_history_streams_preserve_longer_deadlines(
     result = run()
     assert result['all_sessions_classified' if stage == 'topics' else 'all_selected_batches_completed']
     assert (target / ('SESSION-TOPICS.md' if stage == 'topics' else 'SESSIONS.md')).exists()
+
+
+def test_history_readiness_requires_current_evidence_role_validation(tmp_path, monkeypatch):
+    target, run = prepare_history(tmp_path, monkeypatch, 'history')
+
+    def generate(model, data, cache, pending, retry_transient, system):
+        _, result = response_for('history', data)
+        return json.dumps(result), {}, 1, [], {}
+
+    monkeypatch.setattr(history_knowledge, 'generate_summary', generate)
+    run()
+    repo = {'commit': 'head'}
+    assert stage_ready(repo, target, 'history')
+    path = target / 'history-provenance.json'
+    proof = json.loads(path.read_text(encoding='utf-8'))
+    proof.pop('evidence_policy', None)
+    path.write_text(json.dumps(proof), encoding='utf-8')
+    assert not stage_ready(repo, target, 'history')
