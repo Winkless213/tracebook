@@ -76,7 +76,8 @@ class ProgressStream:
     def __init__(self, response, update, key=''):
         self.response, self.update = response, update
         self.key = key
-        self.state = {'output_characters': 0, 'reasoning_characters': 0, 'finish_reason': None}
+        self.state = {'output_characters': 0, 'reasoning_characters': 0, 'finish_reason': None,
+                      'http_version': response.http_version}
 
     def iter_lines(self):
         started = previous = time.monotonic()
@@ -240,6 +241,7 @@ def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM
                         with httpx.Client(proxy='http://127.0.0.1:7897', timeout=httpx.Timeout(180, connect=20), trust_env=False) as client:
                             with client.stream('POST', url, headers={'Authorization': 'Bearer ' + model.key}, json=payload) as response:
                                 stream = ProgressStream(response, progress, model.key)
+                                progress(stream.state)
                                 if response.is_error:
                                     response.read()
                                     try:
