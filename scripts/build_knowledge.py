@@ -230,9 +230,9 @@ def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM
                                     try:
                                         body = response.json()
                                     except ValueError:
-                                        body = None
-                                    if isinstance(body, dict) and body.get('error'):
-                                        stream.state['provider_error'] = provider_error_text(body['error'], model.key)
+                                        body = response.text
+                                    stream.state['provider_error'] = provider_error_text(
+                                        body.get('error', body) if isinstance(body, dict) else body, model.key)
                                 response.raise_for_status()
                                 raw = model.read_stream(stream, usage.update, stop_path.exists)
                     except Exception as exc:

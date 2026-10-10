@@ -81,6 +81,22 @@ def test_http_gateway_failure_keeps_the_sanitized_provider_reason(tmp_path, monk
     assert 'secret-value' not in progress['provider_error']
 
 
+@pytest.mark.parametrize('body', ['Upstream connection failed api_key=secret-value',
+                                  '{"message":"Upstream connection failed api_key=secret-value"}'])
+def test_gateway_error_without_an_error_object_keeps_its_reason(tmp_path, monkeypatch, body):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    client = httpx.Client
+    transport = httpx.MockTransport(lambda request: httpx.Response(502, text=body, request=request))
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: client(transport=transport))
+    with pytest.raises(httpx.HTTPStatusError):
+        summarize(Distiller(), {'repository': {'name': 'example'}, 'files': []}, tmp_path,
+                  {'app.py'}, retry_transient=False)
+    progress = json.loads(next(tmp_path.glob('*.progress.json')).read_text(encoding='utf-8'))
+    assert 'Upstream connection failed' in progress['provider_error']
+    assert 'secret-value' not in progress['provider_error']
+
+
 def test_gateway_wrapped_auth_failure_is_not_treated_as_a_transient_500(tmp_path, monkeypatch):
     monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
     monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
