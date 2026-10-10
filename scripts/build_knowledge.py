@@ -27,6 +27,13 @@ RUN_ABORT = threading.Event()
 RETRY_WAIT = wait_random_exponential(multiplier=15, min=10, max=120)
 
 
+def configure_model_concurrency(workers):
+    global MODEL_SLOTS
+    if workers < 1:
+        raise ValueError('workers must be positive')
+    MODEL_SLOTS = threading.BoundedSemaphore(workers)
+
+
 class RecoverableStreamError(RuntimeError):
     pass
 

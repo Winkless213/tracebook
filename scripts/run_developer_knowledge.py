@@ -1,10 +1,11 @@
-"""串行轮转代码和会话归纳；缓存续跑，临时失败不占住整个队列。"""
+"""按项目并发归纳代码和会话；缓存续跑，统一同步和发布。"""
 import argparse
 import hashlib
 import json
 import os
 import sys
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,7 +14,15 @@ from filelock import FileLock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from devrag.knowledge_status import source_snapshots, stage_ready
 from devrag.models import SECRET
-from scripts.build_knowledge import RUN_ABORT, GenerationPending, RecoverableStreamError, build, save_json, write_index
+from scripts.build_knowledge import (
+    RUN_ABORT,
+    GenerationPending,
+    RecoverableStreamError,
+    build,
+    configure_model_concurrency,
+    save_json,
+    write_index,
+)
 from scripts.classify_project_history import classify
 from scripts.distill_project_history import distill
 from scripts.export_project_history import refresh_exports
@@ -55,7 +64,7 @@ def reconcile_jobs(previous, repos, output):
     return jobs
 
 
-def update_state(jobs, output, state, current=None, sync=None):
+def update_state(jobs, output, state, current=None, sync=None, workers=1):
     rows = []
     for job in jobs:
         row = {'project': job['repo']['name'], 'stage': job['stage'], 'state': job.get('state', 'queued')}
@@ -65,8 +74,9 @@ def update_state(jobs, output, state, current=None, sync=None):
             row['state'] = 'completed'
         row.update({key: job[key] for key in ['version', 'error'] if key in job})
         rows.append(row)
+    active = [{'project': job['repo']['name'], 'stage': job['stage']} for job in jobs if job.get('state') == 'running']
     report = {'worker_pid': os.getpid(), 'updated_at': datetime.now(timezone.utc).isoformat(),
-              'current': current, 'jobs': rows,
+              'current': current or next(iter(active), None), 'active': active, 'concurrency': workers, 'jobs': rows,
               'complete': bool(rows) and all(row['state'] in {'completed', 'no_sources'} for row in rows),
               'source_sync': sync,
               'ready': {stage: sum(row['state'] == 'completed' and row['stage'] == stage for row in rows)
@@ -75,35 +85,50 @@ def update_state(jobs, output, state, current=None, sync=None):
     return report
 
 
-def run_job(job, jobs, packs, output, state, repos=None, sync=None):
+def eligible(job, output, busy=()):
+    repo, stage = job['repo'], job['stage']
+    return (repo['name'] not in busy and job.get('state') != 'needs_fix' and not ready(repo, stage, output)
+            and (stage != 'history' or ready(repo, 'topics', output)))
+
+
+def execute_job(job, packs, output):
     actions = {'code': build, 'topics': classify, 'history': distill}
     repo, stage = job['repo'], job['stage']
     if (output / 'STOP').exists() or RUN_ABORT.is_set():
         raise InterruptedError('Generation stopped; completed batches preserved')
-    if job.get('state') == 'needs_fix' or ready(repo, stage, output) or (stage == 'history' and not ready(repo, 'topics', output)):
-        return False
-    progress, job['state'] = False, 'running'
-    update_state(jobs, output, state, {'project': repo['name'], 'stage': stage}, sync)
+    result = {'state': 'completed', 'progress': True}
     try:
         actions[stage](repo, packs, output, one_batch=True)
-        job['state'], progress = 'completed', True
     except GenerationPending:
-        job['state'], progress = 'queued', True
+        result['state'] = 'queued'
     except RecoverableStreamError as exc:
-        job['state'] = 'retry_wait'
+        result.update(state='retry_wait', progress=False)
         print(json.dumps({'event': 'job_yielded_for_retry', 'project': repo['name'], 'stage': stage,
                           'error_type': type(exc.__cause__).__name__}), flush=True)
+    except InterruptedError:
+        raise
+    except Exception as exc:
+        result.update(state='needs_fix', progress=False, error=SECRET.sub('[REDACTED]', str(exc))[:500])
+        print(json.dumps({'event': 'job_needs_fix', 'project': repo['name'], 'stage': stage,
+                          'error_type': type(exc).__name__, 'error': result['error']}), flush=True)
+    return result
+
+
+def run_job(job, jobs, packs, output, state, repos=None, sync=None):
+    if not eligible(job, output):
+        return False
+    job['state'] = 'running'
+    update_state(jobs, output, state, sync=sync)
+    try:
+        result = execute_job(job, packs, output)
+        job.update({key: value for key, value in result.items() if key != 'progress'})
     except InterruptedError:
         job['state'] = 'interrupted'
         update_state(jobs, output, state, sync=sync)
         raise
-    except Exception as exc:
-        job['state'], job['error'] = 'needs_fix', SECRET.sub('[REDACTED]', str(exc))[:500]
-        print(json.dumps({'event': 'job_needs_fix', 'project': repo['name'], 'stage': stage,
-                          'error_type': type(exc).__name__, 'error': job['error']}), flush=True)
     write_index(repos if repos is not None else [job['repo'] for job in jobs if job['stage'] == 'code'], output)
     update_state(jobs, output, state, sync=sync)
-    return progress
+    return result['progress']
 
 
 def run_pass(jobs, packs, output, state):
@@ -113,23 +138,50 @@ def run_pass(jobs, packs, output, state):
     return progress
 
 
-def run(repos, packs, output, state, watch=False, refresh=None, interval=300, publish=None):
+def run(repos, packs, output, state, watch=False, refresh=None, interval=300, publish=None, workers=1):
+    if workers < 1:
+        raise ValueError('workers must be positive')
     output.mkdir(parents=True, exist_ok=True)
     state.parent.mkdir(parents=True, exist_ok=True)
     jobs = reconcile_jobs(read(state).get('jobs', []), repos, output)
     cursor, next_refresh, next_publication, sync = 0, 0, 0, None
-    RUN_ABORT.clear()
+    active, continuations, needs_publication = {}, [], True
     with FileLock(output / 'generation-run.lock', timeout=0):
+        RUN_ABORT.clear()
+        configure_model_concurrency(workers)
         write_index(repos, output)
-        print(json.dumps({'event': 'generation_worker_started', 'pid': os.getpid(), 'projects': len(repos)}), flush=True)
+        print(json.dumps({'event': 'generation_worker_started', 'pid': os.getpid(), 'projects': len(repos),
+                          'concurrency': workers}), flush=True)
+        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='knowledge')
         try:
             while True:
+                for future in [future for future in active if future.done()]:
+                    job = active.pop(future)
+                    try:
+                        result = future.result()
+                    except InterruptedError:
+                        job['state'] = 'interrupted'
+                        raise
+                    job.update({key: value for key, value in result.items() if key != 'progress'})
+                    needs_publication = needs_publication or result['state'] == 'completed'
+                    if result['progress'] and not ready(job['repo'], job['stage'], output):
+                        continuations.append(job)
+                report = update_state(jobs, output, state, sync=sync, workers=workers)
                 if (output / 'STOP').exists() or RUN_ABORT.is_set():
                     raise InterruptedError('Generation stopped; completed batches preserved')
-                if refresh and time.monotonic() >= next_refresh:
+                draining = (output / 'DRAIN').exists()
+                if draining and not active:
+                    write_index(repos, output)
+                    print(json.dumps({'event': 'generation_worker_drained', 'completed_batches_preserved': True}), flush=True)
+                    return
+                refresh_due = refresh and time.monotonic() >= next_refresh
+                publish_due = publish and needs_publication and time.monotonic() >= next_publication
+                # 来源刷新与发布只在请求自然完成后运行，避免输入和快照在生成中改变。
+                if refresh_due and not active:
                     try:
                         repos = refresh(repos)
                         jobs = reconcile_jobs(jobs, repos, output)
+                        continuations.clear()
                         sync = {'checked_at': datetime.now(timezone.utc).isoformat(),
                                 'state': 'ok' if all(repo.get('sync_status', 'ok') == 'ok' for repo in repos) else 'needs_attention'}
                     except Exception as exc:
@@ -137,35 +189,61 @@ def run(repos, packs, output, state, watch=False, refresh=None, interval=300, pu
                                 'error': SECRET.sub('[REDACTED]', str(exc))[:500]}
                         print(json.dumps({'event': 'source_sync_retry', **sync}), flush=True)
                     next_refresh = time.monotonic() + interval
+                    needs_publication = True
+                    refresh_due = False
+                if not active:
                     write_index(repos, output)
-                report = update_state(jobs, output, state, sync=sync)
-                if publish and time.monotonic() >= next_publication:
+                    report = update_state(jobs, output, state, sync=sync, workers=workers)
+                if publish and needs_publication and time.monotonic() >= next_publication and not active:
                     try:
                         publish()
+                        needs_publication = False
                     except Exception as exc:
                         print(json.dumps({'event': 'publication_retry', 'error_type': type(exc).__name__}), flush=True)
                     next_publication = time.monotonic() + 30
-                if report['complete'] and not watch:
+                    publish_due = False
+                if report['complete'] and not watch and not active:
+                    if publish and needs_publication:
+                        publish()
                     print(json.dumps({'event': 'generation_completed', 'ready': report['ready']}), flush=True)
                     return
                 pending = [job for job in jobs if not ready(job['repo'], job['stage'], output)]
-                if pending and not watch and all(job.get('state') == 'needs_fix' for job in pending):
+                if pending and not watch and not active and all(job.get('state') == 'needs_fix' for job in pending):
                     raise RuntimeError('Remaining jobs need configuration or evidence repair; see worker log')
-                for _ in range(len(jobs)):
-                    job = jobs[cursor % len(jobs)]
-                    cursor += 1
-                    if job.get('state') != 'needs_fix' and not ready(job['repo'], job['stage'], output) and (
-                            job['stage'] != 'history' or ready(job['repo'], 'topics', output)):
-                        if run_job(job, jobs, packs, output, state, repos, sync) and not ready(job['repo'], job['stage'], output):
-                            # 成功批次继续完成当前阶段；临时失败仍让出队列。
-                            cursor -= 1
+                while len(active) < workers and not (draining or refresh_due or publish_due):
+                    busy = {job['repo']['name'] for job in active.values()}
+                    job = next((job for job in continuations if eligible(job, output, busy)), None)
+                    if job is not None:
+                        continuations.remove(job)
+                    else:
+                        for _ in range(len(jobs)):
+                            candidate = jobs[cursor % len(jobs)]
+                            cursor += 1
+                            if eligible(candidate, output, busy):
+                                job = candidate
+                                break
+                    if job is None:
                         break
-                else:
+                    job['state'] = 'running'
+                    update_state(jobs, output, state, sync=sync, workers=workers)
+                    active[pool.submit(execute_job, job, packs, output)] = job
+                if active:
+                    wait(active, timeout=1, return_when=FIRST_COMPLETED)
+                elif not (draining or refresh_due or publish_due):
                     if pending and not watch:
                         raise RuntimeError('Remaining jobs need configuration or evidence repair; see worker log')
                     time.sleep(5)
         finally:
-            update_state(jobs, output, state)
+            # 保持全局锁直到正在运行的请求收尾，禁止第二个执行器重复计费。
+            pool.shutdown(wait=True)
+            for future, job in active.items():
+                try:
+                    result = future.result()
+                    job.update({key: value for key, value in result.items() if key != 'progress'})
+                except InterruptedError:
+                    job['state'] = 'interrupted'
+            write_index(repos, output)
+            update_state(jobs, output, state, sync=sync, workers=workers)
 
 
 def main():
@@ -178,6 +256,7 @@ def main():
     parser.add_argument('--prioritize', action='append', default=[])
     parser.add_argument('--watch', action='store_true')
     parser.add_argument('--interval', type=int, default=300)
+    parser.add_argument('--workers', type=int, default=1)
     parser.add_argument('--owner')
     parser.add_argument('--repositories', type=Path)
     parser.add_argument('--inventory', type=Path)
@@ -192,6 +271,8 @@ def main():
     args = parser.parse_args()
     if args.interval < 30:
         parser.error('--interval must be at least 30 seconds')
+    if args.workers < 1:
+        parser.error('--workers must be positive')
     if args.watch and not all([args.owner, args.repositories, args.inventory, args.deja, args.history_state]):
         parser.error('Watch mode requires GitHub directories, owner, deja and history state')
     if args.publish_host and (not args.publication_state or not os.getenv('APP_PASSWORD')):
@@ -220,7 +301,7 @@ def main():
                 'topics_ready': report['package']['topics_ready'], 'history_ready': report['package']['history_ready']}), flush=True)
 
     run(selected(read(args.catalog)['repositories']), args.packs, args.output, args.state,
-        args.watch, refresh if args.watch else None, args.interval, publish if args.publish_host else None)
+        args.watch, refresh if args.watch else None, args.interval, publish if args.publish_host else None, args.workers)
 
 
 if __name__ == '__main__':
