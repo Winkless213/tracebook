@@ -69,6 +69,20 @@ def test_priority_progress_continues_but_temporary_failure_yields(tmp_path, monk
     assert visited == expected
 
 
+def test_repaired_model_configuration_requeues_jobs_blocked_by_the_old_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv('DISTILL_MODEL', 'gpt-6-astra')
+    repos = [{'name': 'example', 'commit': 'head', 'status': 'verified'}]
+    previous = runner.reconcile_jobs([], repos, tmp_path)
+    for job in previous:
+        job['state'], job['error'] = 'needs_fix', 'Old model unavailable'
+    unchanged = runner.reconcile_jobs(previous, repos, tmp_path)
+    assert all(job['state'] == 'needs_fix' for job in unchanged)
+    monkeypatch.setenv('DISTILL_MODEL', 'gpt-6.1-sol')
+    resumed = runner.reconcile_jobs(previous, repos, tmp_path)
+    assert all(job['state'] == 'queued' and 'error' not in job for job in resumed)
+    assert all(old['version'] != new['version'] for old, new in zip(previous, resumed))
+
+
 def test_topic_readiness_is_revoked_when_an_exported_source_changes(tmp_path):
     project = tmp_path / 'example'
     history = project / 'history'

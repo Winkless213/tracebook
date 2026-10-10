@@ -35,13 +35,16 @@ def ready(repo, stage, output):
 
 def reconcile_jobs(previous, repos, output):
     prior = {(row.get('project') or row['repo']['name'], row['stage']): row for row in previous}
+    profile = hashlib.sha256(json.dumps({key: os.getenv(key, '') for key in [
+        'DISTILL_BASE_URL', 'DISTILL_API_KEY', 'DISTILL_MODEL', 'DISTILL_REASONING_EFFORT',
+        'KNOWLEDGE_REUSE_MODELS']}, sort_keys=True).encode('utf-8')).hexdigest()
     jobs = []
     for repo in repos:
         if repo['status'] != 'verified':
             continue
         snapshots = source_snapshots(output / repo['name'])
         for stage in ['topics', 'history', 'code']:
-            version = hashlib.sha256(json.dumps({'commit': repo['commit'],
+            version = hashlib.sha256(json.dumps({'commit': repo['commit'], 'profile': profile,
                 'sources': snapshots if stage != 'code' else {}}, sort_keys=True).encode('utf-8')).hexdigest()
             old = prior.get((repo['name'], stage), {})
             job = {**old, 'repo': repo, 'stage': stage, 'version': version}

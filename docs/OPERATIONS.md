@@ -63,6 +63,8 @@ chown -R 10001:10001 /opt/devrag/restore-<timestamp>
 
 模型由 `DISTILL_MODEL` 和 `DISTILL_REASONING_EFFORT` 选择。切换模型时，可在 `KNOWLEDGE_REUSE_MODELS` 明确列出仍允许复用的旧模型（逗号分隔）；仅相同输入、提示词与推理强度的已完成批次可复用。缓存、Markdown 与来源记录保留各批实际模型，不把旧批次改称为新模型生成；未完成的批次使用当前配置重新请求。
 
+模型、端点、凭据、推理强度和缓存模型配置仅以指纹进入任务版本。修正配置后，旧配置造成的 `needs_fix` 可重新入队；配置不变时保持阻塞，避免重复付费。已完成文档仍按来源和哈希核对，不因修正配置重新生成。
+
 `--publish-host`、`--publication-state`、`--publication-url` 启用完整快照发布。`scripts/package_knowledge.py` 只打包 catalog 中可用的文件，`scripts/install_knowledge.py` 校验包与旧 catalog 后切换 `/opt/devrag/data/developer-knowledge` 指针，旧版本留在 `knowledge-releases`。同提交既有代码不得被替换或丢弃，项目不得被意外删除。首次将旧目录迁为版本指针时保留旧目录；之后通过符号链接原子替换。
 
 认证 API 逐份回读 Markdown 哈希、确认匿名401及中间文件404后，才更新本机发布状态；内容未变不重复上传，每300秒仍可重新回读。运行中的 API 每次请求解析当前指针，不能缓存旧版本路径。助手从本机 `INDEX.md`、`catalog.json` 选取当前文件；保留在目录中的旧 Markdown 不代表当前可用。
