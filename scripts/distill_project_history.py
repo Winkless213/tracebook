@@ -19,6 +19,21 @@ from scripts.build_knowledge import model_labels, process_batches, save_json
 from scripts.history_knowledge import LESSON_SYSTEM, request_json, validate_lessons
 
 
+def label_delegated_records(records):
+    groups = collections.defaultdict(list)
+    for row in records:
+        source = row['provenance']
+        groups[(source['file'], source['line'], row['role'])].append(row)
+    delegated = set()
+    for (_, _, role), parts in groups.items():
+        text = ''.join(row['text'] for row in sorted(parts, key=lambda row: row['provenance']['part']))
+        if role == 'user' and text.lstrip().startswith('<codex_delegation>'):
+            delegated.update(row['id'] for row in parts)
+    # 委派消息使用 user 信封，但不能充当人类直接决定；保留原始正文和信封角色。
+    return [{**row, 'role': 'agent-delegation', 'source_role': row['role'],
+             'evidence_status': 'unverified_agent_dispatch'} if row['id'] in delegated else row for row in records]
+
+
 def selected_records(sources, topics):
     selected, coverage = [], []
     classifications = {row['id']: row for row in topics['sessions']}
@@ -27,7 +42,7 @@ def selected_records(sources, topics):
         topic = classifications[session['id']]
         if not topic['complete'] or topic['source_sha256'] != source['source_sha256']:
             raise ValueError('Topic classification is incomplete or stale')
-        records = source['records']
+        records = label_delegated_records(source['records'])
         ids = {rid for section in topic['sections'] if section['relevance'] in {'project', 'mixed'}
                for rid in section['evidence_ids']}
         positions = {index for index, row in enumerate(records) if row['id'] in ids}

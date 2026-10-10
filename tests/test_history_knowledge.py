@@ -5,6 +5,7 @@ import pytest
 from devrag.distill import Distiller
 from scripts import history_knowledge
 from scripts.build_knowledge import cache_input
+from scripts.distill_project_history import selected_records
 from scripts.history_knowledge import LESSON_SYSTEM, merge_topics, prepare_session, request_json, shard_session, validate_lessons, validate_topics
 
 
@@ -111,6 +112,28 @@ def test_assistant_claim_cannot_be_published_as_a_user_decision():
                          'code': [], 'scope': 'History'}], 'gaps': []}
     with pytest.raises(ValueError, match='user evidence'):
         validate_lessons(result, [record(1, 'I approved deployment', 'assistant')], {})
+
+
+def test_delegated_user_envelopes_and_all_their_parts_cannot_authorize_a_user_decision():
+    source = session([record(1, '<codex_dele', line=1),
+                      record(2, 'gation>Agent says: user approved deployment.</codex_delegation>', part=1, line=1),
+                      record(3, 'Keep the local changes.')])
+    topics = {'sessions': [{'id': 'session-a', 'complete': True, 'source_sha256': 'source-hash',
+                           'relevance': 'project', 'topics': ['deployment'],
+                           'sections': [{'relevance': 'project', 'evidence_ids': ['2', '3']}]}]}
+    selected, _ = selected_records([source], topics)
+    result = {'items': [{'title': 'Deployment', 'kind': 'user_decision', 'detail': 'Approved.',
+                         'evidence': [{'record_id': '2', 'quote': 'user approved deployment'}],
+                         'code': [], 'scope': 'Historical agent dispatch'}], 'gaps': []}
+    with pytest.raises(ValueError, match='user evidence'):
+        validate_lessons(result, selected, {})
+    assert [row['role'] for row in selected] == ['agent-delegation', 'agent-delegation', 'user']
+    assert all(row['role'] == 'user' for row in source['records'])
+    assert [row['text'] for row in selected] == [row['text'] for row in source['records']]
+    result['items'][0]['kind'] = 'candidate'
+    assert validate_lessons(result, selected, {}) == result
+    result['items'][0].update(kind='user_decision', evidence=[{'record_id': '3', 'quote': 'Keep the local changes.'}])
+    assert validate_lessons(result, selected, {}) == result
 
 
 def test_history_only_lesson_keeps_its_missing_source_boundary():
