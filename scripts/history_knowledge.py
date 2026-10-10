@@ -142,6 +142,23 @@ def request_json(model, data, cache, system, validate):
         validate(saved['result'])
         save_json(path, saved)
         return {**saved, 'reused': True}
+    rejected = cache / (fingerprint + '.rejected.json')
+    if rejected.is_file():
+        previous = json.loads(rejected.read_text(encoding='utf-8'))
+        try:
+            result = json.loads(previous['raw'])
+            validate(result)
+            if SECRET.search(json.dumps(result, ensure_ascii=False)):
+                raise ValueError('Potential secret in structured result')
+        except (ValueError, TypeError, KeyError):
+            pass
+        else:
+            saved = {'input_sha256': fingerprint, 'model': model.model, 'effort': model.effort,
+                     'result': result, 'usage': previous['usage'], 'generation_commit': original_commit,
+                     'cache_key_sha256': fingerprint, 'recovered_from': rejected.name}
+            save_json(path, saved)
+            save_json(progress, {'state': 'completed', 'cached': True, 'recovered': True})
+            return saved
     raw, usage, attempts, failures, metadata = generate_summary(model, data, cache, progress, True, system)
     try:
         result = json.loads(re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip()))
@@ -175,6 +192,17 @@ def topic_batches(sessions, characters=180000):
         yield batch
 
 
+def source_excerpt(text):
+    # Repomix 的连续展示行号不属于源码；只移除该前缀，保留全部源码缩进。
+    numbered = [re.fullmatch(r' *(\d+): (.*)', line) for line in text.splitlines()]
+    if not numbered or not all(numbered):
+        return text
+    first = int(numbered[0][1])
+    if any(int(match[1]) != first + index for index, match in enumerate(numbered)):
+        return text
+    return '\n'.join(match[2] for match in numbered)
+
+
 def validate_lessons(result, records, files):
     mapping = {row['id']: row for row in records}
     if not isinstance(result.get('items'), list) or not isinstance(result.get('gaps'), list):
@@ -199,6 +227,6 @@ def validate_lessons(result, records, files):
             content = files.get(quote.get('path'))
             excerpts = content if isinstance(content, list) else [content]
             if not isinstance(quote.get('quote'), str) or not quote['quote'].strip() or not any(
-                    excerpt and quote['quote'] in excerpt for excerpt in excerpts):
+                    excerpt and (quote['quote'] in excerpt or quote['quote'] in source_excerpt(excerpt)) for excerpt in excerpts):
                 raise ValueError('Unknown or mismatched code quote')
     return result

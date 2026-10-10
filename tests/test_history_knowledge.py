@@ -1,6 +1,11 @@
+import json
+
 import pytest
 
-from scripts.history_knowledge import merge_topics, prepare_session, shard_session, validate_lessons, validate_topics
+from devrag.distill import Distiller
+from scripts import history_knowledge
+from scripts.build_knowledge import cache_input
+from scripts.history_knowledge import LESSON_SYSTEM, merge_topics, prepare_session, request_json, shard_session, validate_lessons, validate_topics
 
 
 def record(number, text, role='user', part=0, line=None):
@@ -114,3 +119,41 @@ def test_history_only_lesson_keeps_its_missing_source_boundary():
                          'code': [], 'scope': 'Historical claim; no matching current source'}],
               'gaps': ['Current source could not be linked']}
     assert validate_lessons(result, [record(1, 'connection failed', 'assistant')], {}) == result
+
+
+def test_multiline_code_quotes_ignore_repomix_display_numbers_and_preserve_source_whitespace():
+    result = {'items': [{'title': 'Tax order', 'kind': 'candidate', 'detail': 'Validate before charge.',
+                         'evidence': [{'record_id': '1', 'quote': 'tax'}],
+                         'code': [{'path': 'checkout.py', 'quote': 'def pay():\n    validate_tax(order)\n    charge(order)'}],
+                         'scope': 'Static source'}], 'gaps': []}
+    numbered = '  9: def pay():\n 10:     validate_tax(order)\n 11:     charge(order)'
+    assert validate_lessons(result, [record(1, 'Check tax')], {'checkout.py': [numbered]}) == result
+    with pytest.raises(ValueError, match='code quote'):
+        validate_lessons(result, [record(1, 'Check tax')], {'checkout.py': [numbered.replace('    charge', '  charge')]})
+    with pytest.raises(ValueError, match='code quote'):
+        validate_lessons(result, [record(1, 'Check tax')], {'checkout.py': [numbered.replace(' 11:', ' 12:')]})
+
+
+def test_rejected_history_result_is_revalidated_without_another_paid_request(tmp_path, monkeypatch):
+    model = Distiller()
+    data = {'repository': {'name': 'example', 'commit': 'head'}, 'records': [record(1, 'Check tax')],
+            'code': {'checkout.py': ['  1: validate_tax(order)\n  2: charge(order)']}}
+    _, fingerprint, destination, _ = cache_input(model, data, tmp_path, LESSON_SYSTEM)
+    result = {'items': [{'title': 'Tax order', 'kind': 'candidate', 'detail': 'Validate before charge.',
+                         'evidence': [{'record_id': '1', 'quote': 'tax'}],
+                         'code': [{'path': 'checkout.py', 'quote': 'validate_tax(order)\ncharge(order)'}],
+                         'scope': 'Static source'}], 'gaps': []}
+    rejected = tmp_path / (fingerprint + '.rejected.json')
+    rejected.write_text(json.dumps({'raw': json.dumps(result), 'usage': {'input_tokens': 10, 'output_tokens': 20}}),
+                        encoding='utf-8')
+
+    def no_request(*args):
+        pytest.fail('A paid request was issued for an already returned valid result')
+
+    monkeypatch.setattr(history_knowledge, 'generate_summary', no_request)
+    saved = request_json(model, data, tmp_path, LESSON_SYSTEM,
+                         lambda value: validate_lessons(value, data['records'], data['code']))
+    assert saved['result'] == result
+    assert saved['recovered_from'] == rejected.name
+    assert saved['usage']['output_tokens'] == 20
+    assert json.loads(destination.read_text(encoding='utf-8'))['result'] == result
