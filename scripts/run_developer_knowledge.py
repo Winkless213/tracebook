@@ -153,7 +153,9 @@ def run(repos, packs, output, state, watch=False, refresh=None, interval=300, pu
                     cursor += 1
                     if job.get('state') != 'needs_fix' and not ready(job['repo'], job['stage'], output) and (
                             job['stage'] != 'history' or ready(job['repo'], 'topics', output)):
-                        run_job(job, jobs, packs, output, state, repos, sync)
+                        if run_job(job, jobs, packs, output, state, repos, sync) and not ready(job['repo'], job['stage'], output):
+                            # 成功批次继续完成当前阶段；临时失败仍让出队列。
+                            cursor -= 1
                         break
                 else:
                     if pending and not watch:

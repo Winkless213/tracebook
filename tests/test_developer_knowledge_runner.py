@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from scripts import run_developer_knowledge as runner
-from scripts.build_knowledge import RecoverableStreamError
+from scripts.build_knowledge import GenerationPending, RecoverableStreamError
 
 
 @pytest.mark.parametrize('script', ['run_developer_knowledge.py', 'classify_project_history.py',
@@ -45,6 +45,28 @@ def test_failed_project_yields_the_pass_to_another_project(tmp_path, monkeypatch
     assert visited == ['failing', 'working']
     assert jobs[0]['state'] == 'retry_wait'
     assert json.loads(state.read_text(encoding='utf-8'))['ready']['topics'] == 1
+
+
+@pytest.mark.parametrize(('failure', 'expected'), [
+    (GenerationPending, ['priority', 'priority', 'other']),
+    (RecoverableStreamError, ['priority', 'other', 'priority']),
+])
+def test_priority_progress_continues_but_temporary_failure_yields(tmp_path, monkeypatch, failure, expected):
+    repos = [{'name': name, 'commit': 'head', 'status': 'verified'} for name in ['priority', 'other']]
+    visited, completed = [], set()
+
+    def build(repo, packs, output, one_batch=False):
+        assert one_batch
+        visited.append(repo['name'])
+        if repo['name'] == 'priority' and visited.count('priority') == 1:
+            raise failure('First batch yielded')
+        completed.add(repo['name'])
+
+    monkeypatch.setattr(runner, 'build', build)
+    monkeypatch.setattr(runner, 'ready', lambda repo, stage, output: stage != 'code' or repo['name'] in completed)
+    monkeypatch.setattr(runner, 'write_index', lambda *args: None)
+    runner.run(repos, tmp_path, tmp_path, tmp_path / 'worker.json')
+    assert visited == expected
 
 
 def test_topic_readiness_is_revoked_when_an_exported_source_changes(tmp_path):
