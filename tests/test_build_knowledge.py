@@ -38,6 +38,56 @@ def test_citation_whitespace_is_normalized_only_when_real_path_exists():
     assert validate_result({'markdown': 'Entry [[ app.py ]]'}, {'app.py'}) == 'Entry [[app.py]]'
 
 
+@pytest.mark.parametrize('literal', ['#[[...]]#', '#[[$modal]]#', '#[[app.py]]#'])
+def test_velocity_raw_blocks_are_literal_code_and_preserve_real_citations(literal):
+    markdown = f'保留 Velocity `{literal}` 原样块。来源 [[ app.py ]]'
+    assert validate_result({'markdown': markdown}, {'app.py'}) == markdown.replace('[[ app.py ]]', '[[app.py]]')
+
+
+def test_velocity_raw_block_cannot_replace_required_source_evidence():
+    with pytest.raises(ValueError, match='citation'):
+        validate_result({'markdown': 'Velocity 原样块 `#[[app.py]]#`'}, {'app.py'})
+
+
+def test_rejected_velocity_result_is_recovered_without_another_model_request(tmp_path, monkeypatch):
+    model = Distiller()
+    data = {'repository': {'name': 'example', 'commit': 'head'}, 'files': []}
+    _, key, _, _ = build_knowledge.cache_input(model, data, tmp_path, build_knowledge.SYSTEM)
+    markdown = '保留 `#[[...]]#`，来源 [[app.py]]'
+    rejected = {'raw': json.dumps({'markdown': markdown}), 'usage': {'input_tokens': 12, 'output_tokens': 34}}
+    (tmp_path / (key + '.rejected.json')).write_text(json.dumps(rejected), encoding='utf-8')
+
+    def request_forbidden(*args, **kwargs):
+        raise AssertionError('已完成的原输出必须直接复核，不得重发请求')
+
+    monkeypatch.setattr(build_knowledge, 'generate_summary', request_forbidden)
+    result = summarize(model, data, tmp_path, {'app.py'})
+    assert result['markdown'] == markdown
+    assert result['usage'] == rejected['usage']
+    assert result['recovered_from'] == key + '.rejected.json'
+    assert summarize(model, data, tmp_path, {'app.py'})['reused']
+
+
+def test_rendered_code_knowledge_preserves_velocity_raw_syntax(tmp_path, monkeypatch):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    repo = {'name': 'example', 'url': 'https://github.com/example/repo', 'branch': 'main',
+            'commit': 'head', 'tracked_files': 1}
+    pack = tmp_path / 'packs/example/head'
+    pack.mkdir(parents=True)
+    (pack / 'metrics.json').write_text(json.dumps({'commit': 'head', 'securityExcluded': []}), encoding='utf-8')
+    (pack / 'code.json').write_text(json.dumps({'files': {'app.py': 'entry'}}), encoding='utf-8')
+    markdown = 'Velocity `#[[...]]#`，来源 [[app.py]]'
+    result = {'markdown': markdown, 'model': 'test', 'effort': 'max', 'usage': {}, 'input_sha256': 'batch'}
+    monkeypatch.setattr(build_knowledge, 'summarize', lambda *args, **kwargs: result)
+    output = tmp_path / 'knowledge'
+    build_knowledge.build(repo, tmp_path / 'packs', output)
+    published = (output / 'example/CODEBASE.md').read_text(encoding='utf-8')
+    assert '`#[[...]]#`' in published
+    assert '[app.py](https://github.com/example/repo/blob/head/app.py)' in published
+    assert '/blob/head/...' not in published
+
+
 def test_model_result_requires_source_evidence():
     with pytest.raises(ValueError, match='citation'):
         validate_result({'markdown': '# Architecture\nEverything works.'}, {'app.py'})

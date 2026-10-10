@@ -26,6 +26,8 @@ from devrag.models import SECRET
 MODEL_SLOTS = threading.BoundedSemaphore(2)
 RUN_ABORT = threading.Event()
 RETRY_WAIT = wait_random_exponential(multiplier=15, min=10, max=120)
+# Velocity 的完整原样块是源码语法，不能当作知识来源或改写成链接。
+SOURCE_CITATION = re.compile(r'#\[\[[^\]\n]+\]\]#|\[\[([^\]\n]+)\]\]')
 
 
 def configure_model_concurrency(workers):
@@ -207,9 +209,9 @@ def validate_result(result, paths):
     markdown = result.get('markdown') if isinstance(result, dict) else None
     if not isinstance(markdown, str) or not markdown.strip():
         raise ValueError('missing Markdown')
-    markdown = re.sub(r'\[\[([^\]\n]+)\]\]', lambda match: '[[' + (
+    markdown = SOURCE_CITATION.sub(lambda match: match[0] if match[1] is None else '[[' + (
         match[1] if match[1] in paths else match[1].strip()) + ']]', markdown)
-    citations = set(re.findall(r'\[\[([^\]\n]+)\]\]', markdown))
+    citations = {path for path in SOURCE_CITATION.findall(markdown) if path}
     if not citations or not citations <= set(paths):
         raise ValueError('missing or unknown source citation')
     if SECRET.search(markdown):
@@ -442,7 +444,7 @@ def build(repo, packs, output, one_batch=False, batch_workers=1):
         result = summarize(model, {'repository': identity, 'scope': '合并以下全部代码分批归纳，形成完整项目开发索引；保留来源与不确定性',
                                    'notes': [note['markdown'] for note in notes]}, cache, files)
     def render(markdown):
-        return re.sub(r'\[\[([^\]\n]+)\]\]', lambda match: '[' + match[1] + ']('
+        return SOURCE_CITATION.sub(lambda match: match[0] if match[1] is None else '[' + match[1] + ']('
                       + repo['url'].removesuffix('.git') + '/blob/' + repo['commit'] + '/' + quote(match[1], safe='/') + ')', markdown)
     header = f'> 仓库：{repo["url"]} · 分支：`{repo["branch"]}` · 提交：`{repo["commit"]}`\n'
     model_runs = notes + ([] if len(notes) == 1 else [result])
