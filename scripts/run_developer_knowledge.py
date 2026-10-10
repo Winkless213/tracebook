@@ -57,7 +57,7 @@ def reconcile_jobs(previous, repos, output):
                 'sources': snapshots if stage != 'code' else {}}, sort_keys=True).encode('utf-8')).hexdigest()
             old = prior.get((repo['name'], stage), {})
             job = {**old, 'repo': repo, 'stage': stage, 'version': version}
-            if old.get('version') != version:
+            if old.get('version') != version or (old.get('state') == 'completed' and not ready(repo, stage, output)):
                 job['state'] = 'queued'
                 job.pop('error', None)
             jobs.append(job)

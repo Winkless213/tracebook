@@ -183,3 +183,15 @@ def test_history_readiness_requires_current_evidence_role_validation(tmp_path, m
     proof.pop('evidence_policy', None)
     path.write_text(json.dumps(proof), encoding='utf-8')
     assert not stage_ready(repo, target, 'history')
+
+
+@pytest.mark.parametrize('stage', ['code', 'topics', 'history'])
+def test_completed_jobs_are_requeued_when_evidence_no_longer_passes(tmp_path, monkeypatch, stage):
+    repos = [{'name': 'example', 'commit': 'head', 'status': 'verified'}]
+    jobs = runner.reconcile_jobs([], repos, tmp_path)
+    for job in jobs:
+        job['state'] = 'completed'
+    monkeypatch.setattr(runner, 'ready', lambda repo, name, output: name != stage)
+    reconciled = runner.reconcile_jobs(jobs, repos, tmp_path)
+    assert next(job for job in reconciled if job['stage'] == stage)['state'] == 'queued'
+    assert all(job['state'] == 'completed' for job in reconciled if job['stage'] != stage)
