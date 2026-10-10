@@ -57,7 +57,7 @@ def test_priority_progress_continues_but_temporary_failure_yields(tmp_path, monk
     repos = [{'name': name, 'commit': 'head', 'status': 'verified'} for name in ['priority', 'other']]
     visited, completed = [], set()
 
-    def build(repo, packs, output, one_batch=False):
+    def build(repo, packs, output, one_batch=False, **kwargs):
         assert one_batch
         visited.append(repo['name'])
         if repo['name'] == 'priority' and visited.count('priority') == 1:
@@ -119,14 +119,14 @@ def test_queue_refresh_adds_projects_and_unblocks_only_changed_input(tmp_path):
     assert {job['repo']['name'] for job in updated} == {'example', 'new-project'}
 
 
-@pytest.mark.parametrize('workers', [3, 10])
+@pytest.mark.parametrize('workers', [3, 10, 15])
 def test_projects_run_at_requested_concurrency_and_publish_after_requests_finish(tmp_path, monkeypatch, workers):
     names = [f'project-{index}' for index in range(workers + 1)]
     repos = [{'name': name, 'commit': 'head', 'status': 'verified'} for name in names]
     barrier, guard = threading.Barrier(workers, timeout=5), threading.Lock()
     active, completed, peak, published, refreshed = set(), set(), [], [], []
 
-    def build(repo, packs, output, one_batch=False):
+    def build(repo, packs, output, one_batch=False, **kwargs):
         assert one_batch
         with guard:
             active.add(repo['name'])
@@ -172,7 +172,7 @@ def test_same_project_stages_never_overlap_and_history_waits_for_topics(tmp_path
             'session': {'id': 'session'}, 'source_sha256': 'source'}), encoding='utf-8')
 
     def action(stage):
-        def process(repo, packs, output, one_batch=False):
+        def process(repo, packs, output, one_batch=False, **kwargs):
             name = repo['name']
             with guard:
                 assert name not in active
@@ -202,7 +202,7 @@ def test_idle_slot_is_refilled_without_waiting_for_a_slow_project(tmp_path, monk
     replacement_started, slow_started = threading.Event(), threading.Event()
     completed = set()
 
-    def build(repo, packs, output, one_batch=False):
+    def build(repo, packs, output, one_batch=False, **kwargs):
         if repo['name'] == 'slow':
             slow_started.set()
             assert replacement_started.wait(5)
@@ -223,7 +223,7 @@ def test_graceful_drain_finishes_active_batches_without_starting_more(tmp_path, 
     repos = [{'name': name, 'commit': 'head', 'status': 'verified'} for name in ['running', 'remaining']]
     visited, completed = [], set()
 
-    def build(repo, packs, output, one_batch=False):
+    def build(repo, packs, output, one_batch=False, **kwargs):
         visited.append(repo['name'])
         (output / 'DRAIN').write_text('Reload concurrency\n', encoding='utf-8')
         assert not (output / 'STOP').exists()
@@ -238,7 +238,7 @@ def test_graceful_drain_finishes_active_batches_without_starting_more(tmp_path, 
     assert json.loads(state.read_text(encoding='utf-8'))['ready']['code'] == 1
 
 
-@pytest.mark.parametrize('workers', [3, 10])
+@pytest.mark.parametrize('workers', [3, 10, 15])
 def test_request_limit_matches_worker_concurrency(tmp_path, monkeypatch, workers):
     from scripts import build_knowledge as builder
 
@@ -268,7 +268,7 @@ def test_worker_state_reports_every_live_job(tmp_path, monkeypatch):
     started, release = threading.Barrier(3, timeout=5), threading.Event()
     completed = set()
 
-    def build(repo, packs, output, one_batch=False):
+    def build(repo, packs, output, one_batch=False, **kwargs):
         started.wait()
         assert release.wait(5)
         completed.add(repo['name'])

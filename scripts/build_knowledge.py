@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -215,9 +216,24 @@ def validate_result(result, paths):
     return markdown
 
 
-def process_batches(process, batches):
-    # 上游失败后不继续排出本项目剩余付费请求，已经完成的批次由缓存续接。
-    return [process(index, batch) for index, batch in enumerate(batches, 1)]
+def process_batches(process, batches, workers=1):
+    if workers == 1:
+        return [process(index, batch) for index, batch in enumerate(batches, 1)]
+    remaining, results = iter(enumerate(batches, 1)), []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix='code-batch') as pool:
+        pending = deque(pool.submit(process, *item) for item in [next(remaining, None) for _ in range(workers)] if item is not None)
+        try:
+            while pending:
+                results.append(pending.popleft().result())
+                item = next(remaining, None)
+                if item is not None:
+                    pending.append(pool.submit(process, *item))
+        except BaseException:
+            # 失败后停止追加请求；已经运行的批次自然完成并保留各自缓存。
+            for future in pending:
+                future.cancel()
+            raise
+    return results
 
 
 def save_json(path, data):
@@ -387,7 +403,7 @@ def summarize(model, data, cache, allowed, retry_transient=True):
     return saved
 
 
-def build(repo, packs, output, one_batch=False):
+def build(repo, packs, output, one_batch=False, batch_workers=1):
     model = Distiller()
     model.timeout = 900
     model.yield_between_batches = one_batch
@@ -410,10 +426,15 @@ def build(repo, packs, output, one_batch=False):
         print(json.dumps({'event': 'summarizing', 'repository': repo['name'], 'batch': index, 'batches': len(batches)}), flush=True)
         data = {'repository': identity, 'scope': f'代码资料第 {index}/{len(batches)} 批，勿把局部资料称为全项目',
                 'files': batch}
-        result = summarize(model, data, cache, {item['path'] for item in batch})
+        batch_model = model
+        if batch_workers > 1:
+            batch_model = Distiller()
+            batch_model.timeout = 900
+            batch_model.yield_between_batches = one_batch
+        result = summarize(batch_model, data, cache, {item['path'] for item in batch})
         print(json.dumps({'event': 'batch_completed', 'repository': repo['name'], 'batch': index}), flush=True)
         return result
-    notes = process_batches(process_batch, batches)
+    notes = process_batches(process_batch, batches, workers=batch_workers)
     if len(notes) == 1:
         result = notes[0]
     else:

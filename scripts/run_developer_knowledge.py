@@ -52,7 +52,7 @@ def reconcile_jobs(previous, repos, output):
         if repo['status'] != 'verified':
             continue
         snapshots = source_snapshots(output / repo['name'])
-        for stage in ['topics', 'history', 'code']:
+        for stage in ['code', 'topics', 'history']:
             version = hashlib.sha256(json.dumps({'commit': repo['commit'], 'profile': profile,
                 'sources': snapshots if stage != 'code' else {}}, sort_keys=True).encode('utf-8')).hexdigest()
             old = prior.get((repo['name'], stage), {})
@@ -91,14 +91,17 @@ def eligible(job, output, busy=()):
             and (stage != 'history' or ready(repo, 'topics', output)))
 
 
-def execute_job(job, packs, output):
+def execute_job(job, packs, output, workers=1):
     actions = {'code': build, 'topics': classify, 'history': distill}
     repo, stage = job['repo'], job['stage']
     if (output / 'STOP').exists() or RUN_ABORT.is_set():
         raise InterruptedError('Generation stopped; completed batches preserved')
     result = {'state': 'completed', 'progress': True}
     try:
-        actions[stage](repo, packs, output, one_batch=True)
+        options = {'one_batch': True}
+        if stage == 'code' and workers > 1:
+            options['batch_workers'] = workers
+        actions[stage](repo, packs, output, **options)
     except GenerationPending:
         result['state'] = 'queued'
     except RecoverableStreamError as exc:
@@ -226,7 +229,7 @@ def run(repos, packs, output, state, watch=False, refresh=None, interval=300, pu
                         break
                     job['state'] = 'running'
                     update_state(jobs, output, state, sync=sync, workers=workers)
-                    active[pool.submit(execute_job, job, packs, output)] = job
+                    active[pool.submit(execute_job, job, packs, output, workers)] = job
                 if active:
                     wait(active, timeout=1, return_when=FIRST_COMPLETED)
                 elif not (draining or refresh_due or publish_due):
