@@ -33,21 +33,31 @@ class GenerationPending(RuntimeError):
 
 
 def transient_stream_error(error, stream):
-    if isinstance(error, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError)):
-        return True
-    if isinstance(error, httpx.HTTPStatusError):
-        return error.response.status_code in {408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
     state = stream.state if stream else {}
-    if isinstance(error, json.JSONDecodeError) and state.get('invalid_event'):
-        return True
-    if str(error).startswith(('提炼流未完整结束', '提炼超过总时限')):
-        return True
     provider = state.get('provider_error', '').lower()
     if any(word in provider for word in ('invalid_api_key', 'authentication', 'permission', 'insufficient_quota',
                                          'context_length', 'invalid_request')):
         return False
+    if isinstance(error, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError)):
+        return True
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in {408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+    if isinstance(error, json.JSONDecodeError) and state.get('invalid_event'):
+        return True
+    if str(error).startswith(('提炼流未完整结束', '提炼超过总时限')):
+        return True
     return any(word in provider for word in ('upstream', 'http/2', 'stream failed', 'server_error', 'internal_error',
                                              'rate_limit', 'temporarily', 'timeout', 'connection'))
+
+
+def provider_error_text(value, key=''):
+    text = json.dumps(value, ensure_ascii=False)
+    if key:
+        text = text.replace(key, '[REDACTED]')
+    text = SECRET.sub('[REDACTED]', text)
+    text = re.sub(r'(?i)(\b(?:api[_-]?key|password|secret|access[_-]?token)\s*[:=]\s*)["\']?[^"\'\s,}]+',
+                  r'\1[REDACTED]', text)
+    return text[:600]
 
 
 def wait_for_retry(seconds, stop_path):
@@ -62,8 +72,9 @@ def wait_for_retry(seconds, stop_path):
 
 
 class ProgressStream:
-    def __init__(self, response, update):
+    def __init__(self, response, update, key=''):
         self.response, self.update = response, update
+        self.key = key
         self.state = {'output_characters': 0, 'reasoning_characters': 0, 'finish_reason': None}
 
     def iter_lines(self):
@@ -79,7 +90,7 @@ class ProgressStream:
                         self.state['reasoning_characters'] += len(choice.get('delta', {}).get('reasoning_content') or '')
                         self.state['finish_reason'] = choice.get('finish_reason') or self.state['finish_reason']
                     if item.get('error'):
-                        self.state['provider_error'] = SECRET.sub('[REDACTED]', str(item['error']))[:600]
+                        self.state['provider_error'] = provider_error_text(item['error'], self.key)
                 except (ValueError, TypeError):
                     self.state['invalid_event'] = True
             current = time.monotonic()
@@ -213,8 +224,16 @@ def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM
                     try:
                         with httpx.Client(proxy='http://127.0.0.1:7897', timeout=httpx.Timeout(180, connect=20), trust_env=False) as client:
                             with client.stream('POST', url, headers={'Authorization': 'Bearer ' + model.key}, json=payload) as response:
+                                stream = ProgressStream(response, progress, model.key)
+                                if response.is_error:
+                                    response.read()
+                                    try:
+                                        body = response.json()
+                                    except ValueError:
+                                        body = None
+                                    if isinstance(body, dict) and body.get('error'):
+                                        stream.state['provider_error'] = provider_error_text(body['error'], model.key)
                                 response.raise_for_status()
-                                stream = ProgressStream(response, progress)
                                 raw = model.read_stream(stream, usage.update, stop_path.exists)
                     except Exception as exc:
                         failure = {'attempt': number, 'error_type': type(exc).__name__,

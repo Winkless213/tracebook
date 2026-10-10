@@ -66,6 +66,40 @@ def test_http_failure_is_recorded_when_retry_is_disabled(tmp_path, monkeypatch):
         summarize(Distiller(), {'repository': {'name': 'another'}, 'files': []}, tmp_path, {'app.py'})
 
 
+def test_http_gateway_failure_keeps_the_sanitized_provider_reason(tmp_path, monkeypatch):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    client = httpx.Client
+    reply = {'error': {'type': 'upstream_error', 'message': 'Upstream rejected api_key=secret-value'}}
+    transport = httpx.MockTransport(lambda request: httpx.Response(500, json=reply, request=request))
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: client(transport=transport))
+    with pytest.raises(httpx.HTTPStatusError):
+        summarize(Distiller(), {'repository': {'name': 'example'}, 'files': []}, tmp_path,
+                  {'app.py'}, retry_transient=False)
+    progress = json.loads(next(tmp_path.glob('*.progress.json')).read_text(encoding='utf-8'))
+    assert 'upstream_error' in progress['provider_error']
+    assert 'secret-value' not in progress['provider_error']
+
+
+def test_gateway_wrapped_auth_failure_is_not_treated_as_a_transient_500(tmp_path, monkeypatch):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    client, calls = httpx.Client, []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(500, json={'error': {'type': 'invalid_api_key', 'message': 'Authentication failed'}},
+                              request=request)
+
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: client(transport=httpx.MockTransport(respond)))
+    model = Distiller()
+    model.yield_between_batches = True
+    with pytest.raises(httpx.HTTPStatusError):
+        summarize(model, {'repository': {'name': 'example'}, 'files': []}, tmp_path, {'app.py'})
+    assert len(calls) == 1
+    assert RUN_ABORT.is_set()
+
+
 def test_rejected_citations_record_failure_and_preserve_model_output(tmp_path, monkeypatch):
     monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
     monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
