@@ -61,6 +61,8 @@ chown -R 10001:10001 /opt/devrag/restore-<timestamp>
 
 未变化的会话命中 `.export-cache`，相同模型输入的批次可跨提交复用；来源变化后撤销相关完成状态。代码、主题和经验分别核对提交、来源快照与 Markdown 哈希；没有关联来源标为 `no_sources`，不能算作经验归纳成功。只清点或只同步部分项目不得改写其他项目的有效来源清单。
 
+模型由 `DISTILL_MODEL` 和 `DISTILL_REASONING_EFFORT` 选择。切换模型时，可在 `KNOWLEDGE_REUSE_MODELS` 明确列出仍允许复用的旧模型（逗号分隔）；仅相同输入、提示词与推理强度的已完成批次可复用。缓存、Markdown 与来源记录保留各批实际模型，不把旧批次改称为新模型生成；未完成的批次使用当前配置重新请求。
+
 `--publish-host`、`--publication-state`、`--publication-url` 启用完整快照发布。`scripts/package_knowledge.py` 只打包 catalog 中可用的文件，`scripts/install_knowledge.py` 校验包与旧 catalog 后切换 `/opt/devrag/data/developer-knowledge` 指针，旧版本留在 `knowledge-releases`。同提交既有代码不得被替换或丢弃，项目不得被意外删除。首次将旧目录迁为版本指针时保留旧目录；之后通过符号链接原子替换。
 
 认证 API 逐份回读 Markdown 哈希、确认匿名401及中间文件404后，才更新本机发布状态；内容未变不重复上传，每300秒仍可重新回读。运行中的 API 每次请求解析当前指针，不能缓存旧版本路径。助手从本机 `INDEX.md`、`catalog.json` 选取当前文件；保留在目录中的旧 Markdown 不代表当前可用。

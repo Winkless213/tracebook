@@ -15,7 +15,7 @@ from devrag.indexing import split_file
 from devrag.knowledge_status import history_sources
 from devrag.models import SECRET
 from devrag.retrieval import tokenize
-from scripts.build_knowledge import save_json
+from scripts.build_knowledge import model_labels, save_json
 from scripts.history_knowledge import LESSON_SYSTEM, request_json, validate_lessons
 
 
@@ -116,7 +116,7 @@ def publish(repo, records, coverage, results, runs, skipped, target):
     save_json(target / 'history-knowledge.json', report)
     labels = {'user_decision': '历史用户决定', 'candidate': '候选经验', 'open_question': '未决问题'}
     lines = [f'# {repo["name"]} 开发会话知识', '',
-             f'> 关联代码提交：`{repo["commit"]}`。gpt-6-astra / max 按主题归纳，历史状态不等于当前运行状态。',
+             f'> 关联代码提交：`{repo["commit"]}`。{model_labels(runs)} 按主题归纳，历史状态不等于当前运行状态。',
              f'> 已分类 {len(coverage)} 份来源，选取 {len(records)} 条话题证据及相邻记录；未将完整工具日志全部送入模型。',
              '> 会话与源码引文已逐字校验；这不等于语义审计或测试通过。改代码前打开对应源码。',
              '> 主题范围与排除结果见 [会话主题目录](SESSION-TOPICS.md)。', '']

@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from devrag.distill import Distiller
 from devrag.knowledge_status import history_sources
 from devrag.models import SECRET
-from scripts.build_knowledge import save_json
+from scripts.build_knowledge import model_labels, save_json
 from scripts.history_knowledge import (
     TOPIC_SYSTEM,
     merge_topics,
@@ -58,6 +58,7 @@ def save_topics(repo, sessions, results, runs, target):
               'all_sessions_classified': all(row['complete'] for row in rows), 'sessions': rows, 'runs': runs}
     labels = {'project': '本项目开发', 'mixed': '混合主题', 'unrelated': '其他事务', 'uncertain': '证据不足', 'pending': '待分类'}
     lines = [f'# {repo["name"]} 会话主题', '',
+             f'> 分类模型：{model_labels(runs)}。',
              '> 强模型按用户请求与标明范围的助手摘录分类；不是对完整工具日志的审计，也不证明历史执行结果。',
              '> 文件目录或 Git remote 只用于关联，具体主题由实际内容判断。经验归纳见后续 SESSIONS.md。', '',
              '| 时间 | 会话 | 分类 | 主题 |', '|---|---|---|---|']

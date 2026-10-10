@@ -3,6 +3,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import os
 import re
 import sys
 import tempfile
@@ -163,25 +164,37 @@ def cache_input(model, data, cache, system):
     # 提交身份由发布文件绑定；相同源码输入不因一次无关提交重新计费。
     normalized = {**data, 'repository': {key: value for key, value in data['repository'].items() if key != 'commit'}}
 
-    def checksum(payload):
-        identity = json.dumps({'model': model.model, 'effort': model.effort, 'system': system, 'data': payload},
+    def checksum(payload, model_name):
+        identity = json.dumps({'model': model_name, 'effort': model.effort, 'system': system, 'data': payload},
                               ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(identity.encode('utf-8')).hexdigest()
 
-    fingerprint, legacy = checksum(normalized), checksum(data)
+    fingerprint = checksum(normalized, model.model)
     path = cache / (fingerprint + '.json')
-    for candidate in dict.fromkeys([path, cache / (legacy + '.json')]):
-        if not candidate.is_file():
-            continue
-        saved = json.loads(candidate.read_text(encoding='utf-8'))
-        commit = saved.get('generation_commit', data['repository'].get('commit'))
-        if commit and commit != data['repository'].get('commit') and commit in json.dumps(
-                saved.get('markdown', saved.get('result')), ensure_ascii=False):
-            continue
-        saved.update(cache_key_sha256=fingerprint)
-        saved.setdefault('generation_commit', commit)
-        return normalized, fingerprint, path, saved
+    # 只复用明确配置的其他模型；保持缓存原来的模型身份和推理强度。
+    models = dict.fromkeys([model.model, *[name.strip() for name in os.getenv('KNOWLEDGE_REUSE_MODELS', '').split(',') if name.strip()]])
+    for model_name in models:
+        identity, legacy = checksum(normalized, model_name), checksum(data, model_name)
+        destination = cache / (identity + '.json')
+        for candidate in dict.fromkeys([destination, cache / (legacy + '.json')]):
+            if not candidate.is_file():
+                continue
+            saved = json.loads(candidate.read_text(encoding='utf-8'))
+            if saved.get('model', model_name) != model_name:
+                continue
+            commit = saved.get('generation_commit', data['repository'].get('commit'))
+            if commit and commit != data['repository'].get('commit') and commit in json.dumps(
+                    saved.get('markdown', saved.get('result')), ensure_ascii=False):
+                continue
+            saved.update(cache_key_sha256=identity)
+            saved.setdefault('model', model_name)
+            saved.setdefault('generation_commit', commit)
+            return normalized, identity, destination, saved
     return normalized, fingerprint, path, None
+
+
+def model_labels(runs):
+    return '、'.join(dict.fromkeys(f'{row["model"]} / {row["effort"]}' for row in runs)) or '没有模型批次'
 
 
 def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM):
@@ -198,6 +211,7 @@ def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM
     def before_sleep(attempt):
         delay = round(attempt.next_action.sleep, 1)
         save_json(pending, {'state': 'retrying', 'repository': data['repository']['name'],
+                            'model': model.model, 'effort': model.effort,
                             'attempt': attempt.attempt_number, 'retry_in_seconds': delay, 'failed_attempts': failures})
         print(json.dumps({'event': 'retrying', 'repository': data['repository']['name'],
                           'attempt': attempt.attempt_number, 'retry_in_seconds': delay,
@@ -215,6 +229,7 @@ def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM
 
                 def progress(values):
                     save_json(pending, {'state': 'running', 'repository': data['repository']['name'],
+                                        'model': model.model, 'effort': model.effort,
                                         'attempt': number, 'failed_attempts': failures, **values})
 
                 with MODEL_SLOTS:
@@ -236,7 +251,8 @@ def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM
                                 response.raise_for_status()
                                 raw = model.read_stream(stream, usage.update, stop_path.exists)
                     except Exception as exc:
-                        failure = {'attempt': number, 'error_type': type(exc).__name__,
+                        failure = {'attempt': number, 'model': model.model, 'effort': model.effort,
+                                   'error_type': type(exc).__name__,
                                    'elapsed_seconds': round(time.monotonic() - attempt_started, 2),
                                    'error': SECRET.sub('[REDACTED]', str(exc))[:500],
                                    'status_code': getattr(getattr(exc, 'response', None), 'status_code', None),
@@ -335,18 +351,18 @@ def build(repo, packs, output, one_batch=False):
         return re.sub(r'\[\[([^\]\n]+)\]\]', lambda match: '[' + match[1] + ']('
                       + repo['url'].removesuffix('.git') + '/blob/' + repo['commit'] + '/' + quote(match[1], safe='/') + ')', markdown)
     header = f'> 仓库：{repo["url"]} · 分支：`{repo["branch"]}` · 提交：`{repo["commit"]}`\n'
-    header += f'> 归纳模型：`{model.model}`（{model.effort}）；输入：Repomix 整理的源码正文及文档，共 {len(files)} 个文本文件。\n'
+    model_runs = notes + ([] if len(notes) == 1 else [result])
+    header += f'> 归纳模型：{model_labels(model_runs)}；输入：Repomix 整理的源码正文及文档，共 {len(files)} 个文本文件。\n'
     header += '> 这是该提交的静态开发参考；改代码前应读取对应源码。未执行测试或核验线上状态。\n\n'
     (target / 'CODEBASE.md').write_text(header + render(result['markdown']) + '\n', encoding='utf-8')
     if len(notes) > 1:
         (target / 'MODULES.md').write_text(header + '\n\n'.join(
             f'## 资料批次 {index}\n\n' + render(note['markdown']) for index, note in enumerate(notes, 1)) + '\n', encoding='utf-8')
-    report = {**identity, 'model': model.model, 'effort': model.effort, 'input_files': len(files),
+    report = {**identity, 'model': result['model'], 'effort': result['effort'], 'input_files': len(files),
               'batches': len(batches), 'all_batches_completed': True, 'tracked_files': repo['tracked_files'],
               'model_usage': [note['usage'] for note in notes] + ([] if len(notes) == 1 else [result['usage']]),
-              'model_runs': [{key: note.get(key) for key in ['input_sha256', 'generation_commit', 'cache_key_sha256', 'reused']}
-                             for note in notes] + ([] if len(notes) == 1 else [{key: result.get(key) for key in
-                                 ['input_sha256', 'generation_commit', 'cache_key_sha256', 'reused']}]),
+              'model_runs': [{key: note.get(key) for key in ['model', 'effort', 'input_sha256', 'generation_commit', 'cache_key_sha256', 'reused']}
+                             for note in model_runs],
               'source_paths': sorted(files), 'security_excluded': metrics['securityExcluded'],
               'not_packed': metrics.get('notPacked', []),
               'codebase_sha256': hashlib.sha256((target / 'CODEBASE.md').read_bytes()).hexdigest()}
@@ -390,7 +406,7 @@ def write_index(repos, output):
     pulled = sum(repo.get('status') == 'verified' for repo in repos)
     lines += ['', f'当前：{len(repos)} 个仓库已发现，{pulled} 个已拉取；{completed} 个项目 Markdown 已生成并通过来源检查。', '',
               '处理方式：[Repomix 1.18.1](https://github.com/yamadashy/repomix) 进行代码整理和敏感信息检查，'
-              'gpt-6-astra（max）归纳。排除文件及模型用量见各项目 provenance.json。',
+              '由配置的强模型归纳。各批实际模型、推理强度、排除文件及用量见各项目 provenance.json。',
               '原始检出与文件清单见 [GitHub 拉取记录](../evidence/github-checkouts.json)。', '']
     (output / 'INDEX.md').write_text('\n'.join(lines), encoding='utf-8')
     save_json(output / 'catalog.json', {'projects': projects})

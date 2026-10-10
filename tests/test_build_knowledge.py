@@ -383,3 +383,29 @@ def test_unchanged_source_batch_is_reused_on_new_commit_and_changed_content_gene
     assert len(calls) == 1
     summarize(Distiller(), {**newer, 'files': [{'path': 'app.py', 'content': 'changed'}]}, tmp_path, {'app.py'})
     assert len(calls) == 2
+
+
+def test_approved_previous_model_cache_keeps_its_identity_without_new_requests(tmp_path, monkeypatch):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    monkeypatch.setenv('DISTILL_MODEL', 'gpt-6-astra')
+    client, calls = httpx.Client, []
+
+    def respond(request):
+        calls.append(json.loads(request.content)['model'])
+        event = {'choices': [{'delta': {'content': json.dumps({'markdown': 'Entry [[app.py]]'})}, 'finish_reason': 'stop'}]}
+        return httpx.Response(200, text='data: ' + json.dumps(event) + '\n\ndata: [DONE]\n\n', request=request)
+
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: client(transport=httpx.MockTransport(respond)))
+    source = {'repository': {'name': 'example', 'commit': 'head'}, 'files': ['original']}
+    original = summarize(Distiller(), source, tmp_path, {'app.py'})
+    monkeypatch.setenv('DISTILL_MODEL', 'gpt-6.1-sol')
+    monkeypatch.setenv('KNOWLEDGE_REUSE_MODELS', 'gpt-6-astra')
+    reused = summarize(Distiller(), source, tmp_path, {'app.py'})
+    assert calls == ['gpt-6-astra']
+    assert reused['model'] == 'gpt-6-astra'
+    assert reused['cache_key_sha256'] == original['cache_key_sha256']
+    assert reused['reused']
+    changed = summarize(Distiller(), {**source, 'files': ['changed']}, tmp_path, {'app.py'})
+    assert calls == ['gpt-6-astra', 'gpt-6.1-sol']
+    assert changed['model'] == 'gpt-6.1-sol'
