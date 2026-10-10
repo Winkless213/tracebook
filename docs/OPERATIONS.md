@@ -69,6 +69,8 @@ chown -R 10001:10001 /opt/devrag/restore-<timestamp>
 
 在知识目录创建 `STOP` 可正常停止执行器并保留批次；恢复前核对实际 PID 和 generation lock，再移除自己创建的标记。后台日志、登录恢复和 SSH 转发由本机原生任务计划管理，不创建 PowerShell 脚本或额外 Codex automation。
 
+SSH 子进程退出由 `scripts/maintain_knowledge_tunnel.py` 的驻留进程在5秒后重连。任务计划负责登录启动；不能只根据其失败重启配置宣称故障恢复已经通过。演练只结束已核对命令行的专用 SSH 子进程，确认监督进程保持不变、新 SSH PID 出现且 `/health` 恢复，再续跑知识发布。
+
 ## 应用验收
 
 - Git和包身份一致，独立配置与数据路径明确。
