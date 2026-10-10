@@ -36,7 +36,7 @@ def ready(repo, stage, output):
 def reconcile_jobs(previous, repos, output):
     prior = {(row.get('project') or row['repo']['name'], row['stage']): row for row in previous}
     profile = hashlib.sha256(json.dumps({key: os.getenv(key, '') for key in [
-        'DISTILL_BASE_URL', 'DISTILL_API_KEY', 'DISTILL_MODEL', 'DISTILL_REASONING_EFFORT',
+        'DISTILL_BASE_URL', 'DISTILL_API_KEY', 'DISTILL_MODEL', 'DISTILL_REASONING_EFFORT', 'DISTILL_API',
         'KNOWLEDGE_REUSE_MODELS']}, sort_keys=True).encode('utf-8')).hexdigest()
     jobs = []
     for repo in repos:

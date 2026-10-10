@@ -9,10 +9,12 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
 import httpx
+from openai import APIConnectionError, APIStatusError, OpenAI
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, stop_never, wait_random_exponential
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -33,15 +35,15 @@ class GenerationPending(RuntimeError):
     pass
 
 
-def transient_stream_error(error, stream):
-    state = stream.state if stream else {}
+def transient_stream_error(error, state):
+    state = state or {}
     provider = state.get('provider_error', '').lower()
     if any(word in provider for word in ('invalid_api_key', 'authentication', 'permission', 'insufficient_quota',
                                          'context_length', 'invalid_request')):
         return False
-    if isinstance(error, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError)):
+    if isinstance(error, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError, APIConnectionError)):
         return True
-    if isinstance(error, httpx.HTTPStatusError):
+    if isinstance(error, (httpx.HTTPStatusError, APIStatusError)):
         return error.response.status_code in {408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
     if isinstance(error, json.JSONDecodeError) and state.get('invalid_event'):
         return True
@@ -77,12 +79,16 @@ class ProgressStream:
         self.response, self.update = response, update
         self.key = key
         self.state = {'output_characters': 0, 'reasoning_characters': 0, 'finish_reason': None,
-                      'http_version': response.http_version}
+                      'http_version': response.http_version, 'status_code': response.status_code,
+                      'api': 'chat_completions'}
 
     def iter_lines(self):
+        return self.observe(self.response.iter_lines())
+
+    def observe(self, lines):
         started = previous = time.monotonic()
         events = 0
-        for line in self.response.iter_lines():
+        for line in lines:
             events += 1
             if line.startswith('data:') and line[5:].strip() != '[DONE]':
                 try:
@@ -100,6 +106,58 @@ class ProgressStream:
                 self.update({'elapsed_seconds': round(current - started), 'stream_events': events, **self.state})
                 previous = current
             yield line
+
+
+class ResponsesStream(ProgressStream):
+    def __init__(self, events, update, key=''):
+        super().__init__(events.response, update, key)
+        self.events = events
+        self.state['api'] = 'responses'
+
+    def iter_lines(self):
+        return self.observe(self.normalized_lines())
+
+    def normalized_lines(self):
+        for event in self.events:
+            self.state['native_event_type'] = event.type
+            payload = {}
+            if event.type == 'response.output_text.delta':
+                payload = {'choices': [{'delta': {'content': event.delta}}]}
+            elif event.type == 'response.reasoning_summary_text.delta':
+                payload = {'choices': [{'delta': {'reasoning_content': event.delta}}]}
+            elif event.type in {'response.completed', 'response.incomplete'}:
+                response = event.response
+                self.state.update(provider_model=response.model, provider_response_id=response.id)
+                reason = getattr(response.incomplete_details, 'reason', None)
+                finish = 'stop' if response.status == 'completed' else ('length' if reason == 'max_output_tokens' else None)
+                payload = {'choices': [{'delta': {}, 'finish_reason': finish}]}
+                if response.usage:
+                    payload['usage'] = {'prompt_tokens': response.usage.input_tokens,
+                                        'completion_tokens': response.usage.output_tokens}
+            elif event.type in {'response.failed', 'error'}:
+                body = event.model_dump()
+                payload = {'error': body.get('response', {}).get('error') or body}
+            yield 'data: ' + json.dumps(payload, ensure_ascii=False)
+            if event.type in {'response.completed', 'response.incomplete', 'response.failed', 'error'}:
+                return
+
+
+@contextmanager
+def request_stream(model, payload, update):
+    api = os.getenv('DISTILL_API', 'chat_completions')
+    if api not in {'responses', 'chat_completions'}:
+        raise ValueError('Unknown knowledge API protocol')
+    with httpx.Client(proxy='http://127.0.0.1:7897', timeout=httpx.Timeout(180, connect=20), trust_env=False) as client:
+        if api == 'responses':
+            with OpenAI(base_url=model.base, api_key=model.key, http_client=client, max_retries=0) as sdk:
+                with sdk.responses.create(model=model.model, instructions=payload['messages'][0]['content'],
+                        input=[{'role': 'user', 'content': [{'type': 'input_text', 'text': payload['messages'][1]['content']}]}],
+                        reasoning={'effort': model.effort}, stream=True, store=False) as events:
+                    yield ResponsesStream(events, update, model.key)
+        else:
+            url = model.base if model.base.endswith('/chat/completions') else model.base + '/chat/completions'
+            with client.stream('POST', url, headers={'Authorization': 'Bearer ' + model.key}, json=payload) as response:
+                yield ProgressStream(response, update, model.key)
 
 
 SYSTEM = '''你为 Codex/Claude 等开发助手整理项目代码知识，不是面向用户的问答或营销介绍。
@@ -207,7 +265,6 @@ def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM
                'stream_options': {'include_usage': True},
                'messages': [{'role': 'system', 'content': system},
                             {'role': 'user', 'content': json.dumps(data, ensure_ascii=False)}]}
-    url = model.base if model.base.endswith('/chat/completions') else model.base + '/chat/completions'
 
     def before_sleep(attempt):
         delay = round(attempt.next_action.sleep, 1)
@@ -231,6 +288,7 @@ def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM
                 def progress(values):
                     save_json(pending, {'state': 'running', 'repository': data['repository']['name'],
                                         'model': model.model, 'effort': model.effort,
+                                        'api': os.getenv('DISTILL_API', 'chat_completions'),
                                         'attempt': number, 'failed_attempts': failures, **values})
 
                 with MODEL_SLOTS:
@@ -238,38 +296,42 @@ def generate_summary(model, data, cache, pending, retry_transient, system=SYSTEM
                     model.generated_in_pass = True
                     progress({})
                     try:
-                        with httpx.Client(proxy='http://127.0.0.1:7897', timeout=httpx.Timeout(180, connect=20), trust_env=False) as client:
-                            with client.stream('POST', url, headers={'Authorization': 'Bearer ' + model.key}, json=payload) as response:
-                                stream = ProgressStream(response, progress, model.key)
-                                progress(stream.state)
-                                if response.is_error:
-                                    response.read()
-                                    try:
-                                        body = response.json()
-                                    except ValueError:
-                                        body = response.text
-                                    stream.state['provider_error'] = provider_error_text(
-                                        body.get('error', body) if isinstance(body, dict) else body, model.key)
-                                response.raise_for_status()
-                                raw = model.read_stream(stream, usage.update, stop_path.exists)
+                        with request_stream(model, payload, progress) as stream:
+                            response = stream.response
+                            progress(stream.state)
+                            if response.is_error:
+                                response.read()
+                                try:
+                                    body = response.json()
+                                except ValueError:
+                                    body = response.text
+                                stream.state['provider_error'] = provider_error_text(
+                                    body.get('error', body) if isinstance(body, dict) else body, model.key)
+                            response.raise_for_status()
+                            raw = model.read_stream(stream, usage.update, stop_path.exists)
                     except Exception as exc:
                         failure = {'attempt': number, 'model': model.model, 'effort': model.effort,
                                    'error_type': type(exc).__name__,
                                    'elapsed_seconds': round(time.monotonic() - attempt_started, 2),
-                                   'error': SECRET.sub('[REDACTED]', str(exc))[:500],
+                                   'error': provider_error_text(str(exc), model.key)[:500],
                                    'status_code': getattr(getattr(exc, 'response', None), 'status_code', None),
+                                   'api': os.getenv('DISTILL_API', 'chat_completions'),
                                    'usage': usage, **(stream.state if stream else {})}
+                        if isinstance(exc, APIStatusError):
+                            failure['provider_error'] = provider_error_text(exc.body, model.key)
                         failures.append(failure)
                         save_json(pending, {'state': 'failed', **failure, 'failed_attempts': failures})
-                        if retry_transient and transient_stream_error(exc, stream):
+                        if retry_transient and transient_stream_error(exc, failure):
                             raise RecoverableStreamError(failure['error']) from exc
-                        if (isinstance(exc, httpx.RequestError)
-                                or (isinstance(exc, httpx.HTTPStatusError) and (exc.response.status_code >= 500
+                        if (isinstance(exc, (httpx.RequestError, APIConnectionError))
+                                or (isinstance(exc, (httpx.HTTPStatusError, APIStatusError)) and (exc.response.status_code >= 500
                                                                               or exc.response.status_code in {401, 403}))
-                                or (stream and stream.state.get('provider_error'))):
+                                or failure.get('provider_error')):
                             RUN_ABORT.set()
                         raise
-                return raw, usage, number, failures
+                metadata = {key: stream.state[key] for key in [
+                    'api', 'http_version', 'status_code', 'provider_model', 'provider_response_id'] if key in stream.state}
+                return raw, usage, number, failures, metadata
     except InterruptedError:
         save_json(pending, {'state': 'cancelled', 'failed_attempts': failures})
         raise
@@ -298,7 +360,7 @@ def summarize(model, data, cache, allowed, retry_transient=True):
         except ValueError:
             pass
     started = time.monotonic()
-    raw, usage, attempts, failures = generate_summary(model, data, cache, pending, retry_transient)
+    raw, usage, attempts, failures, metadata = generate_summary(model, data, cache, pending, retry_transient)
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip())
     try:
         result = json.loads(raw)
@@ -311,9 +373,10 @@ def summarize(model, data, cache, allowed, retry_transient=True):
     saved = {'markdown': result['markdown'], 'input_sha256': fingerprint, 'model': model.model,
              'effort': model.effort, 'usage': usage, 'seconds': round(time.monotonic() - started, 1),
              'attempts': attempts, 'failed_attempts': failures,
-             'generation_commit': original_commit, 'cache_key_sha256': fingerprint}
+             'generation_commit': original_commit, 'cache_key_sha256': fingerprint, **metadata}
     save_json(path, saved)
-    save_json(pending, {'state': 'completed', 'seconds': saved['seconds'], 'attempts': attempts, 'failed_attempts': failures})
+    save_json(pending, {'state': 'completed', 'seconds': saved['seconds'], 'attempts': attempts,
+                        'failed_attempts': failures, **metadata})
     return saved
 
 
@@ -363,7 +426,8 @@ def build(repo, packs, output, one_batch=False):
     report = {**identity, 'model': result['model'], 'effort': result['effort'], 'input_files': len(files),
               'batches': len(batches), 'all_batches_completed': True, 'tracked_files': repo['tracked_files'],
               'model_usage': [note['usage'] for note in notes] + ([] if len(notes) == 1 else [result['usage']]),
-              'model_runs': [{key: note.get(key) for key in ['model', 'effort', 'input_sha256', 'generation_commit', 'cache_key_sha256', 'reused']}
+              'model_runs': [{key: note.get(key) for key in ['model', 'effort', 'input_sha256', 'generation_commit', 'cache_key_sha256',
+                                                          'reused', 'api', 'provider_model', 'provider_response_id']}
                              for note in model_runs],
               'source_paths': sorted(files), 'security_excluded': metrics['securityExcluded'],
               'not_packed': metrics.get('notPacked', []),

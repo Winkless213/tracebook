@@ -3,6 +3,7 @@ import json
 
 import httpx
 import pytest
+from openai import APIError
 
 from devrag.distill import Distiller
 from scripts import build_knowledge
@@ -41,6 +42,104 @@ def test_model_result_requires_source_evidence():
     with pytest.raises(ValueError, match='citation'):
         validate_result({'markdown': '# Architecture\nEverything works.'}, {'app.py'})
     assert validate_result({'markdown': '# Architecture\nEntrypoint [[app.py]]'}, {'app.py'})
+
+
+@pytest.mark.parametrize('terminal', ['completed', 'missing', 'incomplete', 'disconnect_after_completed'])
+def test_native_responses_preserves_valid_results_and_rejects_unfinished_streams(tmp_path, monkeypatch, terminal):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    monkeypatch.setenv('DISTILL_API', 'responses')
+    client, calls = httpx.Client, []
+    raw = json.dumps({'markdown': 'Entry [[app.py]]'})
+
+    def respond(request):
+        calls.append(request)
+        body = json.loads(request.content)
+        assert request.url.path == '/v1/responses'
+        assert body['reasoning'] == {'effort': 'max'}
+        assert body['store'] is False
+        assert not {'max_tokens', 'max_completion_tokens', 'max_output_tokens'} & body.keys()
+        events = [{'type': 'response.output_text.delta', 'delta': raw, 'sequence_number': 1,
+                   'item_id': 'message', 'output_index': 0, 'content_index': 0}]
+        if terminal != 'missing':
+            status = 'completed' if terminal == 'disconnect_after_completed' else terminal
+            events.append({'type': 'response.' + status, 'sequence_number': 2,
+                'response': {'id': 'resp_test', 'object': 'response', 'created_at': 1, 'model': 'gpt-6.1-sol',
+                    'status': status, 'output': [],
+                    'incomplete_details': {'reason': 'max_output_tokens'} if status == 'incomplete' else None,
+                    'usage': {'input_tokens': 10, 'output_tokens': 20, 'total_tokens': 30,
+                              'input_tokens_details': {'cached_tokens': 0},
+                              'output_tokens_details': {'reasoning_tokens': 12}}}})
+        text = ''.join('event: ' + row['type'] + '\ndata: ' + json.dumps(row) + '\n\n' for row in events)
+        if terminal == 'disconnect_after_completed':
+            class CompletedThenDisconnected(httpx.SyncByteStream):
+                def __iter__(self):
+                    yield text.encode('utf-8')
+                    raise httpx.RemoteProtocolError('Connection closed after completed response')
+
+            return httpx.Response(200, stream=CompletedThenDisconnected(),
+                                  headers={'content-type': 'text/event-stream'}, request=request)
+        return httpx.Response(200, text=text, headers={'content-type': 'text/event-stream'}, request=request)
+
+    class FixtureClient(client):
+        def __init__(self, **kwargs):
+            super().__init__(transport=httpx.MockTransport(respond))
+
+    monkeypatch.setattr(httpx, 'Client', FixtureClient)
+    model = Distiller()
+    model.model = 'gpt-6.1-sol'
+    data = {'repository': {'name': 'example'}, 'files': []}
+    if terminal in {'completed', 'disconnect_after_completed'}:
+        saved = summarize(model, data, tmp_path, {'app.py'}, retry_transient=False)
+        assert saved['markdown'] == 'Entry [[app.py]]'
+        assert saved['usage'] == {'input_tokens': 10, 'output_tokens': 20}
+        assert saved['api'] == 'responses'
+        assert saved['provider_response_id'] == 'resp_test'
+        assert summarize(model, data, tmp_path, {'app.py'})['reused']
+        assert len(calls) == 1
+    else:
+        with pytest.raises(RuntimeError, match='未完整结束|输出长度限制'):
+            summarize(model, data, tmp_path, {'app.py'}, retry_transient=False)
+        assert not [path for path in tmp_path.glob('*.json') if not path.name.endswith('.progress.json')]
+
+
+@pytest.mark.parametrize('failure', ['connection', 'upstream', 'authentication', 'stream_upstream', 'stream_authentication'])
+def test_native_responses_retries_temporary_errors_and_preserves_hard_error_evidence(tmp_path, monkeypatch, failure):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    monkeypatch.setenv('DISTILL_API', 'responses')
+    client, calls = httpx.Client, []
+    authentication = failure.endswith('authentication')
+    code = 'invalid_api_key' if authentication else 'upstream_error'
+
+    def respond(request):
+        calls.append(request)
+        if failure == 'connection':
+            raise httpx.ConnectError('Temporary upstream disconnection', request=request)
+        message = 'Authentication failed for test-key' if authentication else 'Upstream disconnected test-key'
+        if failure.startswith('stream_'):
+            body = {'type': 'error', 'code': code, 'message': message, 'param': None, 'sequence_number': 1}
+            return httpx.Response(200, text='event: error\ndata: ' + json.dumps(body) + '\n\n',
+                                  headers={'content-type': 'text/event-stream'}, request=request)
+        return httpx.Response(500, json={'error': {'code': code, 'message': message}}, request=request)
+
+    class FixtureClient(client):
+        def __init__(self, **kwargs):
+            super().__init__(transport=httpx.MockTransport(respond))
+
+    monkeypatch.setattr(httpx, 'Client', FixtureClient)
+    model = Distiller()
+    model.yield_between_batches = True
+    error = (RuntimeError if failure == 'stream_authentication' else APIError) if authentication else build_knowledge.RecoverableStreamError
+    with pytest.raises(error):
+        summarize(model, {'repository': {'name': 'example'}}, tmp_path, {'app.py'})
+    progress = json.loads(next(tmp_path.glob('*.progress.json')).read_text(encoding='utf-8'))
+    assert len(calls) == (1 if authentication else 2)
+    assert RUN_ABORT.is_set() == authentication
+    assert progress['api'] == 'responses'
+    assert 'test-key' not in json.dumps(progress)
+    if failure != 'connection':
+        assert code in progress['provider_error']
 
 
 def test_batch_boundary_handles_one_long_line_and_unicode():

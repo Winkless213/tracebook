@@ -142,7 +142,7 @@ def request_json(model, data, cache, system, validate):
         validate(saved['result'])
         save_json(path, saved)
         return {**saved, 'reused': True}
-    raw, usage, attempts, failures = generate_summary(model, data, cache, progress, True, system)
+    raw, usage, attempts, failures, metadata = generate_summary(model, data, cache, progress, True, system)
     try:
         result = json.loads(re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip()))
         validate(result)
@@ -155,9 +155,9 @@ def request_json(model, data, cache, system, validate):
         raise
     saved = {'input_sha256': fingerprint, 'model': model.model, 'effort': model.effort,
              'result': result, 'usage': usage, 'attempts': attempts, 'failed_attempts': failures,
-             'generation_commit': original_commit, 'cache_key_sha256': fingerprint}
+             'generation_commit': original_commit, 'cache_key_sha256': fingerprint, **metadata}
     save_json(path, saved)
-    save_json(progress, {'state': 'completed', 'attempts': attempts})
+    save_json(progress, {'state': 'completed', 'attempts': attempts, **metadata})
     return saved
 
 
