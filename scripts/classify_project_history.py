@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from devrag.distill import Distiller
 from devrag.knowledge_status import history_sources
 from devrag.models import SECRET
-from scripts.build_knowledge import model_labels, save_json
+from scripts.build_knowledge import model_labels, process_batches, save_json
 from scripts.history_knowledge import (
     TOPIC_SYSTEM,
     merge_topics,
@@ -20,7 +20,7 @@ from scripts.history_knowledge import (
 )
 
 
-def classify(repo, packs, output, one_batch=False):
+def classify(repo, packs, output, one_batch=False, batch_workers=1):
     target = output / repo['name']
     sources = history_sources(target)
     sessions = [prepare_session(source) for source in sources]
@@ -30,11 +30,22 @@ def classify(repo, packs, output, one_batch=False):
     model.timeout = 900
     model.yield_between_batches = one_batch
     cache, results, runs = target / '.topics-cache', {}, []
-    for batch in topic_batches(sessions):
-        print(json.dumps({'event': 'classifying_topics', 'project': repo['name'], 'sections': len(batch)}), flush=True)
+    def process_batch(number, batch):
+        print(json.dumps({'event': 'classifying_topics', 'project': repo['name'], 'batch': number, 'sections': len(batch)}), flush=True)
         data = {'repository': {key: repo[key] for key in ['name', 'url', 'commit']},
                 'repository_readme_excerpt': SECRET.sub('[REDACTED]', readme[:10000]), 'sessions': batch}
-        saved = request_json(model, data, cache, TOPIC_SYSTEM, lambda result: validate_topics(result, batch))
+        batch_model = model
+        if batch_workers > 1:
+            batch_model = Distiller()
+            batch_model.timeout = model.timeout
+            batch_model.yield_between_batches = one_batch
+        return request_json(batch_model, data, cache, TOPIC_SYSTEM, lambda result: validate_topics(result, batch))
+
+    inputs = topic_batches(sessions)
+    # 串行仍逐批落盘；并发由现有全局信号量限流，主线程按来源顺序合并。
+    completed = (process_batch(number, batch) for number, batch in enumerate(inputs, 1)) if batch_workers == 1 else (
+        process_batches(process_batch, inputs, workers=batch_workers))
+    for saved in completed:
         runs.append({key: saved.get(key) for key in ['input_sha256', 'model', 'effort', 'usage', 'generation_commit', 'cache_key_sha256', 'reused']})
         for row in saved['result']['sessions']:
             native_id = row['id'].rsplit('/', 1)[0]

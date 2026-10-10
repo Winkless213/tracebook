@@ -15,7 +15,7 @@ from devrag.indexing import split_file
 from devrag.knowledge_status import history_sources
 from devrag.models import SECRET
 from devrag.retrieval import tokenize
-from scripts.build_knowledge import model_labels, save_json
+from scripts.build_knowledge import model_labels, process_batches, save_json
 from scripts.history_knowledge import LESSON_SYSTEM, request_json, validate_lessons
 
 
@@ -82,7 +82,7 @@ def batches(records, characters=95000):
         yield batch
 
 
-def distill(repo, packs, output, one_batch=False):
+def distill(repo, packs, output, one_batch=False, batch_workers=1):
     target = output / repo['name']
     topics = json.loads((target / 'session-topics.json').read_text(encoding='utf-8'))
     if not topics['all_sessions_classified']:
@@ -93,14 +93,21 @@ def distill(repo, packs, output, one_batch=False):
     index, model, results, runs = CodeEvidence(files), Distiller(), [], []
     model.timeout = 900
     model.yield_between_batches = one_batch
-    for number, batch in enumerate(batches(records), 1):
+    def process_batch(number, batch):
         snippets = index.retrieve(batch)
         data = {'repository': {key: repo[key] for key in ['name', 'url', 'commit']},
                 'scope': '主题分类选中的历史记录与相邻上下文；不是全部会话全文。源码仅含按主题检索的静态片段。',
                 'records': batch, 'code': snippets}
         print(json.dumps({'event': 'distilling_history', 'project': repo['name'], 'batch': number, 'records': len(batch)}), flush=True)
-        saved = request_json(model, data, target / '.lessons-cache', LESSON_SYSTEM,
-                             lambda result: validate_lessons(result, batch, snippets))
+        batch_model = model
+        if batch_workers > 1:
+            batch_model = Distiller()
+            batch_model.timeout = model.timeout
+            batch_model.yield_between_batches = one_batch
+        return request_json(batch_model, data, target / '.lessons-cache', LESSON_SYSTEM,
+                            lambda result: validate_lessons(result, batch, snippets))
+
+    for saved in process_batches(process_batch, batches(records), workers=batch_workers):
         results.append(saved['result'])
         runs.append({key: saved.get(key) for key in ['input_sha256', 'model', 'effort', 'usage', 'generation_commit', 'cache_key_sha256', 'reused']})
     return publish(repo, records, coverage, results, runs, index.skipped, target)

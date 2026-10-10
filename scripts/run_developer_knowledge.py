@@ -99,7 +99,7 @@ def execute_job(job, packs, output, workers=1):
     result = {'state': 'completed', 'progress': True}
     try:
         options = {'one_batch': True}
-        if stage == 'code' and workers > 1:
+        if workers > 1:
             options['batch_workers'] = workers
         actions[stage](repo, packs, output, **options)
     except GenerationPending:
