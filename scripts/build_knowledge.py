@@ -408,7 +408,8 @@ def summarize(model, data, cache, allowed, retry_transient=True):
 
 def build(repo, packs, output, one_batch=False, batch_workers=1):
     model = Distiller()
-    model.timeout = 900
+    # 强推理和完整项目合并可能超过十五分钟，保留用户配置的更长等待时间。
+    model.timeout = max(model.timeout, 3600)
     model.yield_between_batches = one_batch
     if not model.configured:
         raise RuntimeError('Strong model is not configured')
@@ -432,7 +433,7 @@ def build(repo, packs, output, one_batch=False, batch_workers=1):
         batch_model = model
         if batch_workers > 1:
             batch_model = Distiller()
-            batch_model.timeout = 900
+            batch_model.timeout = model.timeout
             batch_model.yield_between_batches = one_batch
         result = summarize(batch_model, data, cache, {item['path'] for item in batch})
         print(json.dumps({'event': 'batch_completed', 'repository': repo['name'], 'batch': index}), flush=True)

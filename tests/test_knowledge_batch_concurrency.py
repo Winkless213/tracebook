@@ -3,6 +3,7 @@ import threading
 
 import pytest
 
+from devrag import distill as distill_module
 from scripts import build_knowledge as builder
 from scripts import run_developer_knowledge as runner
 
@@ -56,6 +57,54 @@ def test_code_readiness_is_prioritized_without_violating_history_dependencies(tm
     assert [job['stage'] for job in jobs] == ['code', 'topics', 'history']
 
 
+@pytest.mark.parametrize('workers', [1, 2])
+@pytest.mark.parametrize(('configured_timeout', 'elapsed'), [(None, 1000), ('5400', 4000)])
+def test_slow_complete_code_batches_and_merge_are_not_cut_off_at_fifteen_minutes(
+        tmp_path, monkeypatch, workers, configured_timeout, elapsed):
+    monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
+    monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
+    if configured_timeout is None:
+        monkeypatch.delenv('DISTILL_TIMEOUT', raising=False)
+    else:
+        monkeypatch.setenv('DISTILL_TIMEOUT', configured_timeout)
+    repo = {'name': 'example', 'url': 'https://github.com/test/example.git', 'branch': 'main',
+            'commit': 'head', 'tracked_files': 2}
+    pack = tmp_path / 'packs/example/head'
+    pack.mkdir(parents=True)
+    (pack / 'metrics.json').write_text(json.dumps({'commit': 'head', 'securityExcluded': []}), encoding='utf-8')
+    (pack / 'code.json').write_text(json.dumps({'files': {'a.py': 'a', 'b.py': 'b'}}), encoding='utf-8')
+    monkeypatch.setattr(builder, 'make_batches', lambda files: [[{'path': name, 'content': text}]
+                                                             for name, text in files.items()])
+    clock = threading.local()
+
+    def monotonic():
+        calls = getattr(clock, 'calls', 0)
+        clock.calls = calls + 1
+        return 0 if calls == 0 else elapsed
+
+    class Response:
+        def __init__(self, markdown):
+            self.markdown = markdown
+
+        def iter_lines(self):
+            event = {'choices': [{'delta': {'content': json.dumps({'markdown': self.markdown})}, 'finish_reason': 'stop'}]}
+            yield 'data: ' + json.dumps(event)
+            yield 'data: [DONE]'
+
+    def summarize(model, data, cache, allowed):
+        clock.calls = 0
+        markdown = '[[' + next(iter(allowed)) + ']]'
+        result = json.loads(model.read_stream(Response(markdown), lambda usage: None, lambda: False))
+        return {**result, 'model': 'test-model', 'effort': 'max', 'usage': {},
+                'input_sha256': markdown, 'cache_key_sha256': markdown}
+
+    monkeypatch.setattr(distill_module.time, 'monotonic', monotonic)
+    monkeypatch.setattr(builder, 'summarize', summarize)
+    proof = builder.build(repo, tmp_path / 'packs', tmp_path / 'knowledge', batch_workers=workers)
+    assert proof['all_batches_completed']
+    assert len(proof['model_runs']) == 3
+
+
 def test_parallel_code_batches_use_independent_models_then_merge_validated_results(tmp_path, monkeypatch):
     repo = {'name': 'example', 'url': 'https://github.com/test/example.git', 'branch': 'main',
             'commit': 'head', 'tracked_files': 3}
@@ -69,6 +118,7 @@ def test_parallel_code_batches_use_independent_models_then_merge_validated_resul
 
     class Model:
         configured, model, effort = True, 'test-model', 'max'
+        timeout = 240
 
     def summarize(model, data, cache, allowed):
         if 'files' in data:
