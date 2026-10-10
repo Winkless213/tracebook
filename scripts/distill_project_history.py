@@ -91,7 +91,8 @@ def distill(repo, packs, output, one_batch=False, batch_workers=1):
     records, coverage = selected_records(sources, topics)
     files = json.loads((packs / repo['name'] / repo['commit'] / 'code.json').read_text(encoding='utf-8'))['files']
     index, model, results, runs = CodeEvidence(files), Distiller(), [], []
-    model.timeout = 900
+    # 与代码归纳一致，避免强推理被旧十五分钟时限截断，并保留更长配置。
+    model.timeout = max(model.timeout, 3600)
     model.yield_between_batches = one_batch
     def process_batch(number, batch):
         snippets = index.retrieve(batch)

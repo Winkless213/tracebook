@@ -3,13 +3,14 @@ import threading
 
 import pytest
 
+from devrag import distill as distill_module
 from scripts import classify_project_history as topics
 from scripts import distill_project_history as lessons
 from scripts import history_knowledge
 from scripts import run_developer_knowledge as runner
 
 
-def prepare_history(tmp_path, monkeypatch, stage):
+def prepare_history(tmp_path, monkeypatch, stage, workers=3):
     repo = {'name': 'example', 'url': 'https://github.com/test/example', 'commit': 'head'}
     pack = tmp_path / 'packs/example/head'
     pack.mkdir(parents=True)
@@ -34,7 +35,7 @@ def prepare_history(tmp_path, monkeypatch, stage):
     if stage == 'history':
         topics.save_topics(repo, prepared, classifications, [], target)
     action = topics.classify if stage == 'topics' else lessons.distill
-    return target, lambda: action(repo, tmp_path / 'packs', tmp_path / 'knowledge', one_batch=True, batch_workers=3)
+    return target, lambda: action(repo, tmp_path / 'packs', tmp_path / 'knowledge', one_batch=True, batch_workers=workers)
 
 
 def response_for(stage, data):
@@ -124,3 +125,42 @@ def test_history_jobs_receive_shared_request_concurrency(tmp_path, monkeypatch, 
     result = runner.execute_job({'repo': {'name': 'example'}, 'stage': stage}, tmp_path, tmp_path, workers=15)
     assert result == {'state': 'completed', 'progress': True}
     assert observed == [(True, 15)]
+
+
+@pytest.mark.parametrize('stage', ['topics', 'history'])
+@pytest.mark.parametrize('workers', [1, 3])
+@pytest.mark.parametrize(('configured_timeout', 'elapsed'), [(None, 1000), ('5400', 4000)])
+def test_slow_complete_history_streams_preserve_longer_deadlines(
+        tmp_path, monkeypatch, stage, workers, configured_timeout, elapsed):
+    if configured_timeout is None:
+        monkeypatch.delenv('DISTILL_TIMEOUT', raising=False)
+    else:
+        monkeypatch.setenv('DISTILL_TIMEOUT', configured_timeout)
+    target, run = prepare_history(tmp_path, monkeypatch, stage, workers)
+    clock = threading.local()
+
+    def monotonic():
+        calls = getattr(clock, 'calls', 0)
+        clock.calls = calls + 1
+        return 0 if calls == 0 else elapsed
+
+    class Response:
+        def __init__(self, result):
+            self.result = result
+
+        def iter_lines(self):
+            event = {'choices': [{'delta': {'content': json.dumps(self.result)}, 'finish_reason': 'stop'}]}
+            yield 'data: ' + json.dumps(event)
+            yield 'data: [DONE]'
+
+    def generate(model, data, cache, pending, retry_transient, system):
+        _, result = response_for(stage, data)
+        clock.calls = 0
+        raw = model.read_stream(Response(result), lambda usage: None, lambda: False)
+        return raw, {}, 1, [], {}
+
+    monkeypatch.setattr(distill_module.time, 'monotonic', monotonic)
+    monkeypatch.setattr(history_knowledge, 'generate_summary', generate)
+    result = run()
+    assert result['all_sessions_classified' if stage == 'topics' else 'all_selected_batches_completed']
+    assert (target / ('SESSION-TOPICS.md' if stage == 'topics' else 'SESSIONS.md')).exists()
