@@ -57,7 +57,8 @@ def transient_stream_error(error, state):
         return True
     if str(error).startswith(('提炼流未完整结束', '提炼超过总时限')):
         return True
-    return any(word in provider for word in ('upstream', 'http/2', 'stream failed', 'server_error', 'internal_error',
+    return any(word in provider for word in ('missing_completed', 'stream ended without response.completed',
+                                             'upstream', 'http/2', 'stream failed', 'server_error', 'internal_error',
                                              'rate_limit', 'temporarily', 'timeout', 'connection'))
 
 

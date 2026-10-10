@@ -103,20 +103,23 @@ def test_native_responses_preserves_valid_results_and_rejects_unfinished_streams
         assert not [path for path in tmp_path.glob('*.json') if not path.name.endswith('.progress.json')]
 
 
-@pytest.mark.parametrize('failure', ['connection', 'upstream', 'authentication', 'stream_upstream', 'stream_authentication'])
+@pytest.mark.parametrize('failure', ['connection', 'upstream', 'authentication', 'stream_upstream',
+                                    'stream_authentication', 'stream_missing_completed'])
 def test_native_responses_retries_temporary_errors_and_preserves_hard_error_evidence(tmp_path, monkeypatch, failure):
     monkeypatch.setenv('DISTILL_BASE_URL', 'https://model.test/v1')
     monkeypatch.setenv('DISTILL_API_KEY', 'test-key')
     monkeypatch.setenv('DISTILL_API', 'responses')
     client, calls = httpx.Client, []
     authentication = failure.endswith('authentication')
-    code = 'invalid_api_key' if authentication else 'upstream_error'
+    code = 'invalid_api_key' if authentication else ('missing_completed' if failure == 'stream_missing_completed' else 'upstream_error')
 
     def respond(request):
         calls.append(request)
         if failure == 'connection':
             raise httpx.ConnectError('Temporary upstream disconnection', request=request)
         message = 'Authentication failed for test-key' if authentication else 'Upstream disconnected test-key'
+        if failure == 'stream_missing_completed':
+            message = 'gateway error: stream ended without response.completed'
         if failure.startswith('stream_'):
             body = {'type': 'error', 'code': code, 'message': message, 'param': None, 'sequence_number': 1}
             return httpx.Response(200, text='event: error\ndata: ' + json.dumps(body) + '\n\n',
