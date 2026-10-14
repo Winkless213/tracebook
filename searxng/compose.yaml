@@ -1,0 +1,18 @@
+# 参照 SearXNG 官方 container/docker-compose.yml，只保留本机单用户所需部分。
+name: tracebook-searxng
+
+services:
+  searxng:
+    image: docker.io/searxng/searxng:2026.10.13-22c64b8d3
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET to a random string}
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+      - searxng_cache:/var/cache/searxng
+    restart: unless-stopped
+    mem_limit: 512m
+
+volumes:
+  searxng_cache:

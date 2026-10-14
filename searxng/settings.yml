@@ -1,0 +1,29 @@
+# 本机自建搜索：参照 Vane（MIT）的 searxng/settings.yml，开启 JSON 输出供客服调用。
+# secret_key 由 compose 传入的 SEARXNG_SECRET 覆盖，不写在此文件。
+use_default_settings: true
+
+search:
+  formats:
+    - html
+    - json
+
+server:
+  limiter: false
+  image_proxy: false
+
+# 2026-10-15 根因：容器直连境外引擎被限速（curl_cffi 打 wikipedia 直连 10.5s、走代理 2.3s），
+# 超过 SearXNG 默认 outgoing.request_timeout=3.0s，导致所有引擎 engine timeout。
+# 修法：出网走宿主机 Clash 混合端口（host.docker.internal:7897）。取舍：SearXNG 联网依赖 Clash 在跑；
+# Clash 端口变了或换机器就改这一行，或整段删除回到直连。extra_proxy_timeout 给代理链路留余量。
+outgoing:
+  request_timeout: 5.0
+  extra_proxy_timeout: 5
+  proxies:
+    all:
+      - http://host.docker.internal:7897
+
+# 2026-10-14 本机实测：默认引擎只有 startpage（结果标为 google cse）稳定，duckduckgo 验证码、brave 限流；
+# 默认关闭的 yahoo 6/6 有结果，开启作为第二个独立来源。
+engines:
+  - name: yahoo
+    disabled: false
