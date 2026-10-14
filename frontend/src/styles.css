@@ -308,15 +308,6 @@ button, p, h1, h2, h3, dd, blockquote { overflow-wrap: anywhere; }
 .import-privacy p { margin: 0; font-size: 10px; line-height: 1.8; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 23px; }
 
-.login-page { min-height: 100vh; padding: 40px 64px 25px; display: flex; flex-direction: column; max-width: 1600px; margin: 0 auto; }
-.login-brand .brand strong { font-size: 23px; }
-.login-brand .brand > div > span { font-size: 11px; }
-.login-layout { width: min(1040px, 100%); margin: auto; padding: 80px 0 100px; display: grid; grid-template-columns: minmax(0, 1fr) 365px; gap: 120px; align-items: center; }
-.login-intro h1 { margin: 20px 0 21px; font-size: 43px; letter-spacing: -2px; font-weight: 580; line-height: 1.5; }
-.login-intro > p { color: #9b9ba9; font-size: 13px; line-height: 2; margin-bottom: 29px; }
-.login-proof { display: flex; align-items: center; gap: 7px; color: #9794ab; font-size: 10px; }
-.login-proof > svg { width: 15px; height: 15px; }
-.proof-divider { display: inline-block; width: 1px; height: 11px; background: #dad8e4; margin: 0 8px; }
 .reference-demo { margin-top: 40px; border: 1px solid #e4e1ed; background: #fbfafe; border-radius: 9px; padding: 18px 20px 0; width: 335px; max-width: 100%; }
 .reference-demo > div:first-child { display: flex; align-items: center; gap: 9px; color: #b1a8c2; font-size: 9px; margin-bottom: 20px; }
 .reference-tag { background: #eeeafa; color: #a293bf; font: 8px Consolas, monospace; border-radius: 3px; border: 1px solid #e1daf1; padding: 1px 4px; }
@@ -325,17 +316,6 @@ button, p, h1, h2, h3, dd, blockquote { overflow-wrap: anywhere; }
 .demo-line.short { width: 56%; margin-bottom: 19px; }
 .demo-footer { font-size: 9px; color: #b8afc7; padding: 12px 0; border-top: 1px solid #eeebf4; display: flex; gap: 5px; align-items: center; }
 .tiny-square { width: 5px; height: 5px; border: 1px solid #bcb0d2; border-radius: 1px; }
-.login-card { border: 1px solid #e4e1ed; border-radius: 13px; background: white; padding: 32px; box-shadow: 0 6px 20px #25203904; }
-.lock-mark { width: 42px; height: 42px; background: #f3effb; border: 1px solid #e9e0f5; border-radius: 11px; color: #8e79b9; display: flex; align-items: center; justify-content: center; margin-bottom: 23px; }
-.login-card h2 { font-size: 21px; letter-spacing: -.7px; font-weight: 580; margin-bottom: 9px; }
-.login-card > p { font-size: 11px; color: #ada3b7; margin-bottom: 28px; }
-.login-card label { font-size: 11px; color: #978ca3; font-weight: 400; margin-bottom: 8px; }
-.login-card input { width: 100%; font-size: 12px; min-height: 43px; border-color: #e5dfed; background: #fdfcfe; }
-.login-card input::placeholder { color: #b6adbf; }
-.login-submit { width: 100%; min-height: 42px; margin-top: 17px; justify-content: space-between; padding-inline: 15px; }
-.login-submit > .loading-inline { margin-inline: auto; }
-.login-note { display: flex; align-items: center; gap: 5px; color: #b7aec1; margin-top: 27px; padding-top: 17px; border-top: 1px solid #f0ecf5; font-size: 9px; }
-.login-footer { display: flex; justify-content: space-between; gap: 20px; font-size: 9px; color: #b6afc3; border-top: 1px solid #e7e3ed; padding-top: 18px; }
 .boot-page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px; padding: 20px; }
 .boot-card { max-width: 470px; padding: 30px; width: 100%; text-align: center; color: #9b91ad; }
 .boot-card h1 { font-size: 22px; color: #81718e; }
@@ -358,9 +338,6 @@ button, p, h1, h2, h3, dd, blockquote { overflow-wrap: anywhere; }
   .evidence-empty p { margin-bottom: 22px; }
   .evidence-empty-footer { padding-bottom: 14px; }
   .header-actions { gap: 9px; }
-  .login-layout { gap: 60px; }
-  .login-intro h1 { font-size: 38px; }
-  .login-page { padding-inline: 45px; }
 }
 @media (max-width: 800px) {
   .app-shell { display: block; }
@@ -397,20 +374,7 @@ button, p, h1, h2, h3, dd, blockquote { overflow-wrap: anywhere; }
   .section-heading h2 { font-size: 13px; }
   .answer-summary, .claim-body > p { font-size: 13px; }
   .asked-question > p { font-size: 14px; }
-  .login-page { padding: 24px; }
-  .login-layout { width: 100%; grid-template-columns: 1fr; gap: 32px; padding: 44px 0 45px; max-width: 420px; }
-  .login-intro h1 { font-size: 31px; letter-spacing: -1.1px; line-height: 1.5; margin: 13px 0 14px; }
-  .login-intro > p { font-size: 12px; margin-bottom: 19px; }
-  .login-intro .eyebrow { font-size: 8px; }
-  .login-proof { font-size: 9px; }
   .reference-demo { display: none; }
-  .login-card { padding: 25px; }
-  .login-card h2 { font-size: 20px; }
-  .login-card > p { margin-bottom: 21px; }
-  .login-card label { font-size: 12px; }
-  .login-card input { font-size: 14px; }
-  .lock-mark { width: 35px; height: 35px; margin-bottom: 17px; }
-  .login-footer { font-size: 8px; flex-wrap: wrap; gap: 8px; }
 }
 @media (max-width: 480px) {
   .workspace-main { padding: 23px 16px 18px; }
@@ -648,43 +612,4 @@ button, p, h1, h2, h3, dd, blockquote { overflow-wrap: anywhere; }
   .conversation-references > .button { font-size: 11px; }
   .conversation-source-content { padding: 12px; }
   .conversation-evidence-select select { min-height: 44px; }
-}
-
-.knowledge-shell { min-height: 100vh; background: #f7f7f3; color: #24382e; }
-.knowledge-topbar { max-width: 1260px; margin: 0 auto; padding: 22px 40px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e0e5db; }
-.knowledge-main { max-width: 1180px; margin: 0 auto; padding: 52px 40px 28px; }
-.knowledge-intro h1 { font-size: clamp(25px, 3vw, 36px); font-weight: 550; letter-spacing: -0.8px; line-height: 1.45; margin: 12px 0; }
-.knowledge-intro p { color: #68756b; font-size: 15px; line-height: 1.8; }
-.knowledge-totals { display: flex; gap: 64px; padding: 28px 0 30px; margin: 25px 0 30px; border-top: 1px solid #e0e5db; border-bottom: 1px solid #e0e5db; }
-.knowledge-totals > div { display: flex; align-items: baseline; gap: 12px; }
-.knowledge-totals strong { font-size: 30px; font-weight: 550; font-variant-numeric: tabular-nums; }
-.knowledge-totals span { color: #69766d; font-size: 13px; }
-.knowledge-projects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.knowledge-project { min-width: 0; border: 1px solid #e0e5db; background: #fff; border-radius: 12px; padding: 23px 24px; }
-.knowledge-project-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
-.knowledge-project-heading h2 { margin: 0; font-size: 17px; font-weight: 600; overflow-wrap: anywhere; line-height: 1.5; }
-.knowledge-state { flex-shrink: 0; font-size: 11px; padding: 5px 9px; border-radius: 5px; background: #f0f1ed; color: #73786d; }
-.knowledge-state.ready { background: #e7f0e7; color: #356344; }
-.knowledge-branch { color: #89918a; font-size: 12px; overflow-wrap: anywhere; margin: 5px 0 20px; }
-.knowledge-project-description { font-size: 13px; color: #617168; line-height: 1.7; margin: 0; }
-.knowledge-history { margin-top: 7px; }
-.knowledge-details { font-size: 12px; margin-top: 15px; }
-.knowledge-details summary { cursor: pointer; padding: 9px 0; color: #356344; }
-.knowledge-details a { padding: 10px 0; display: flex; justify-content: space-between; text-decoration: none; border-top: 1px solid #eef0eb; color: #356344; }
-.knowledge-details a:hover { text-decoration: underline; }
-.knowledge-details a span { color: #859187; }
-.knowledge-footer { color: #89918a; font-size: 12px; line-height: 1.8; margin-top: 32px; }
-.knowledge-empty { padding: 35px 0; }
-.knowledge-empty h2 { font-size: 18px; }
-.knowledge-empty p { font-size: 14px; color: #69766d; }
-.knowledge-error { margin: 24px 0; }
-@media (max-width: 720px) {
-  .knowledge-topbar { padding: 16px 20px; }
-  .knowledge-main { padding: 32px 20px 24px; }
-  .knowledge-projects { grid-template-columns: minmax(0, 1fr); }
-  .knowledge-totals { justify-content: space-between; gap: 12px; padding: 22px 0; }
-  .knowledge-totals > div { flex-direction: column; gap: 3px; }
-  .knowledge-totals strong { font-size: 27px; }
-  .knowledge-totals span { font-size: 11px; }
-  .knowledge-project { padding: 20px; }
 }

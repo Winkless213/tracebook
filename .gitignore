@@ -8,3 +8,5 @@ frontend/dist/
 data/
 output/
 *.pyc
+work/probe-venv/
+work/support-research/

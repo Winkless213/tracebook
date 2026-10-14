@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from filelock import FileLock
@@ -18,6 +20,9 @@ from .llm import LLM
 from .models import Bundle, Question, Search, Strict
 from .retrieval import Retriever
 from .store import Store
+from .support import SupportService
+from .support.api import support_router
+from .support.knowledge import SupportKnowledge
 from .worker import Worker
 
 SAMPLES = [
@@ -56,7 +61,7 @@ class BodyLimit:
         await self.app(scope, replay, send)
 
 
-def create_app(data_dir=None, model=None, start_worker=True, distill_model=None):
+def create_app(data_dir=None, model=None, start_worker=True, distill_model=None, *, support_model=None, support_search=None):
     root = Path(data_dir or os.getenv('DATA_DIR', './data'))
     root.mkdir(parents=True, exist_ok=True)
     store = Store(root / 'knowledge.sqlite')
@@ -65,6 +70,7 @@ def create_app(data_dir=None, model=None, start_worker=True, distill_model=None)
     history, distiller = HistoryStore(store), distill_model or Distiller()
     history_worker = HistoryWorker(history, distiller)
     knowledge_files = KnowledgeFiles(os.getenv('DEVELOPER_KNOWLEDGE_DIR', str(root / 'developer-knowledge')))
+    support = SupportService(root, support_model, SupportKnowledge(retriever, knowledge_files), support_search)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -82,10 +88,13 @@ def create_app(data_dir=None, model=None, start_worker=True, distill_model=None)
             if start_worker:
                 await asyncio.gather(asyncio.to_thread(thread.join, 155), asyncio.to_thread(history_thread.join, 155))
             lock.release()
+            support.close()
 
     app = FastAPI(title='Tracebook', lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.store, app.state.worker = store, worker
     app.state.history, app.state.history_worker = history, history_worker
+    app.state.support = support
+    app.include_router(support_router(support))
     app.add_middleware(BodyLimit)
 
     @app.middleware('http')
@@ -106,6 +115,15 @@ def create_app(data_dir=None, model=None, start_worker=True, distill_model=None)
     @app.exception_handler(KeyError)
     async def missing(_request, _error):
         return JSONResponse({'detail': '项目、快照或记录不存在'}, 404)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_input(request, error):
+        if request.url.path.startswith('/api/support/'):
+            if '/conversations' in request.url.path:
+                return JSONResponse({'detail': '问题须为 1–4000 字，公开搜索词不超过 160 字；请检查会话和请求编号'}, 422)
+            # 默认校验错误含原始 input；客服日志即使校验失败也不能反射回响应。
+            return JSONResponse({'detail': '客服输入格式或长度不符合要求；日志最多 64000 UTF-8 字节，确认结果须为布尔值'}, 422)
+        return await request_validation_exception_handler(request, error)
 
     @app.exception_handler(ValueError)
     async def conflict(_request, error):

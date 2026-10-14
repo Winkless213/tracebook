@@ -1,27 +1,48 @@
 import React from 'react';
+import { useReducedMotion } from 'motion/react';
+import * as m from 'motion/react-m';
+import { PlusIcon } from '@phosphor-icons/react/dist/csr/Plus';
+import { ArrowRightIcon } from '@phosphor-icons/react/dist/csr/ArrowRight';
+import { MagnifyingGlassIcon } from '@phosphor-icons/react/dist/csr/MagnifyingGlass';
+import { UploadSimpleIcon } from '@phosphor-icons/react/dist/csr/UploadSimple';
+import { FileTextIcon } from '@phosphor-icons/react/dist/csr/FileText';
+import { GitBranchIcon } from '@phosphor-icons/react/dist/csr/GitBranch';
+import { ClockCounterClockwiseIcon } from '@phosphor-icons/react/dist/csr/ClockCounterClockwise';
+import { XIcon } from '@phosphor-icons/react/dist/csr/X';
+import { DownloadSimpleIcon } from '@phosphor-icons/react/dist/csr/DownloadSimple';
+import { CaretRightIcon } from '@phosphor-icons/react/dist/csr/CaretRight';
+import { CheckIcon } from '@phosphor-icons/react/dist/csr/Check';
+import { ArrowsClockwiseIcon } from '@phosphor-icons/react/dist/csr/ArrowsClockwise';
+import { LinkIcon } from '@phosphor-icons/react/dist/csr/Link';
+import { ShieldCheckIcon } from '@phosphor-icons/react/dist/csr/ShieldCheck';
+import { SignOutIcon } from '@phosphor-icons/react/dist/csr/SignOut';
+import { StackIcon } from '@phosphor-icons/react/dist/csr/Stack';
+import { HeadsetIcon } from '@phosphor-icons/react/dist/csr/Headset';
+import { TerminalWindowIcon } from '@phosphor-icons/react/dist/csr/TerminalWindow';
+import { BooksIcon } from '@phosphor-icons/react/dist/csr/Books';
+import { BugIcon } from '@phosphor-icons/react/dist/csr/Bug';
+import { ChatTeardropTextIcon } from '@phosphor-icons/react/dist/csr/ChatTeardropText';
+import { CheckCircleIcon } from '@phosphor-icons/react/dist/csr/CheckCircle';
 import { STATUS } from '../lib/domain.js';
 
-const paths = {
-  plus: <path d="M12 5v14M5 12h14" />,
-  arrow: <path d="M5 12h14m-6-6 6 6-6 6" />,
-  search: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></>,
-  upload: <><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5" /></>,
-  file: <><path d="M14 3H5v18h14V8zM14 3v5h5M9 12h6M9 16h6" /></>,
-  branch: <><circle cx="7" cy="5" r="2" /><circle cx="17" cy="5" r="2" /><circle cx="7" cy="19" r="2" /><path d="M7 7v10m10-10v3c0 3-10 1-10 5" /></>,
-  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
-  close: <path d="m6 6 12 12M6 18 18 6" />,
-  download: <><path d="M12 3v13m-5-5 5 5 5-5M4 17v4h16v-4" /></>,
-  chevron: <path d="m9 5 7 7-7 7" />,
-  check: <path d="m5 12 4 4L19 6" />,
-  refresh: <><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6 6a8 8 0 0 1 13 2M18 18A8 8 0 0 1 5 16" /></>,
-  link: <><path d="m10 13 4-4M8 16l-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M14 8l2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(1 0) scale(.92)" /></>,
-  lock: <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></>,
-  logout: <><path d="M9 4H4v16h5M9 12h12m-4-4 4 4-4 4" /></>,
-  layers: <><path d="m12 3 10 5-10 5L2 8zM2 13l10 5 10-5M2 18l10 5 10-5" /></>,
+const icons = {
+  plus: PlusIcon, arrow: ArrowRightIcon, search: MagnifyingGlassIcon, upload: UploadSimpleIcon,
+  file: FileTextIcon, branch: GitBranchIcon, clock: ClockCounterClockwiseIcon, close: XIcon,
+  download: DownloadSimpleIcon, chevron: CaretRightIcon, check: CheckIcon, refresh: ArrowsClockwiseIcon,
+  link: LinkIcon, lock: ShieldCheckIcon, logout: SignOutIcon, layers: StackIcon,
+  support: HeadsetIcon, terminal: TerminalWindowIcon, books: BooksIcon, bug: BugIcon,
+  chat: ChatTeardropTextIcon, verified: CheckCircleIcon,
 };
 
 export function Icon({ name, size = 18, ...props }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>{paths[name] || paths.file}</svg>;
+  const Symbol = icons[name] || icons.file;
+  return <Symbol size={size} weight="duotone" aria-hidden="true" {...props} />;
+}
+
+export function Reveal({ as = 'div', delay = 0, children, ...props }) {
+  const reduce = useReducedMotion();
+  const Surface = m[as];
+  return <Surface initial={{ opacity: 0, y: reduce ? 0 : 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: reduce ? 0 : .32, delay: reduce ? 0 : delay, ease: [.22, 1, .36, 1] }} {...props}>{children}</Surface>;
 }
 
 export function Brand() {

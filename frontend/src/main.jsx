@@ -1,7 +1,9 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import { LazyMotion, domAnimation, MotionConfig } from 'motion/react';
 import App from './App.jsx';
 import './styles.css';
+import './workspace.css';
 
 class RenderBoundary extends React.Component {
   state = { error: false };
@@ -12,4 +14,4 @@ class RenderBoundary extends React.Component {
   }
 }
 
-createRoot(document.getElementById('root')).render(<React.StrictMode><RenderBoundary><App /></RenderBoundary></React.StrictMode>);
+createRoot(document.getElementById('root')).render(<React.StrictMode><RenderBoundary><MotionConfig reducedMotion="user"><LazyMotion features={domAnimation} strict><App /></LazyMotion></MotionConfig></RenderBoundary></React.StrictMode>);
