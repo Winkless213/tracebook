@@ -1,6 +1,6 @@
 # 独立部署与恢复
 
-范围：单人 Tracebook，单容器/单 worker，SQLite WAL。默认回环端口8083、候选18083，与既有 another app 的目录、数据及8080服务完全隔离。脚本不会自动操作其他应用；`--protect-container`用于部署前后比对其ID、镜像、PID及启动时间。
+范围：单人 Tracebook，单容器/单 worker，SQLite WAL。默认回环端口8083、候选18083，与同一宿主机上其他应用的目录、数据及端口完全隔离。脚本不会自动操作其他应用；`--protect-container`用于部署前后比对其ID、镜像、PID及启动时间。
 
 ## 发布状态机
 

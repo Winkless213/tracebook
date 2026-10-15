@@ -1,0 +1,6 @@
+[
+  {"id":"q01","question":"检索用的是什么算法？一次最多返回几个片段，证据预算多少字符？","paths":["devrag/retrieval.py"],"expected":"BM25Okapi 加符号匹配；默认 top_k=6，证据预算 24000 字符"},
+  {"id":"q02","question":"技术客服的排查流程在哪里暂停等用户补充资料，状态怎么持久化？","paths":["devrag/support/service.py"],"expected":"LangGraph StateGraph，interrupt 暂停等待补充或确认，SqliteSaver 持久化检查点"},
+  {"id":"q03","question":"发给模型之前，日志里的哪些敏感内容会被脱敏？","paths":["devrag/support/redact.py"],"expected":"私钥、Authorization、Cookie、凭据赋值、URL 内凭据、sk-/ghp_ 等前缀令牌、Bearer、JWT、长令牌、邮箱"},
+  {"id":"q04","question":"Tracebook 支持向量检索和多人权限吗？","paths":[],"expected_status":"insufficient","expected":"资料未提供相关实现，应说明证据不足"}
+]
