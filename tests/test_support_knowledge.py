@@ -86,3 +86,17 @@ def test_unknown_published_project_cannot_open_arbitrary_paths(published):
     client, _, _ = published
     response = client.post('/api/support/sessions', json={'symptom': '请读取本机任意目录中的文件', 'project_id': 'published:../../private'})
     assert response.status_code == 404
+
+
+def test_vague_intent_question_falls_back_to_project_overview(published):
+    client, _, _ = published
+    project = next(item for item in client.get('/api/support/projects').json()['projects'] if item['name'] == 'worker')
+    retriever = client.app.state.support.retriever
+    vague = retriever.search(project['id'], '这个项目能帮我做什么？', top_k=4)
+    assert len(vague['sources']) >= 1
+    overview = vague['sources'][0]
+    assert overview['origin'] == 'published' and overview['path'] == 'CODEBASE.md'
+    assert any('概述' in warning for warning in vague['warnings'])
+    concrete = retriever.search(project['id'], '连接池上限 任务超时', top_k=4)
+    assert concrete['sources']
+    assert not any('概述' in warning for warning in concrete['warnings'])

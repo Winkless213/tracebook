@@ -84,6 +84,23 @@ class SupportKnowledge:
             warnings.append('知识同步尚未完成，本次使用上次保留的已发布资料。')
         snapshot = {'id': digest([pid, commit, fingerprints]), 'project_id': pid, 'active': True}
         result = PublishedSnapshot(snapshot, corpus).search(pid, question, top_k=top_k)
+        if not result['sources']:
+            # 意图/泛问经停词过滤后查询词为空，词项重叠取不到任何片段；回退补入项目概述真实片段。
+            # 首个块常为 metadata 引言行，需累积开头若干块才有实质概述。
+            overview, budget = [], 2400
+            for item in corpus:
+                if item['path'] != 'CODEBASE.md':
+                    continue
+                if all(line.startswith('#') for line in item['content'].splitlines() if line.strip()):
+                    continue
+                overview.append(item)
+                budget -= len(item['content'])
+                if budget <= 0:
+                    break
+            if overview:
+                result['sources'] = [{**overview[0], 'id': 'S1', 'score': 0.0,
+                                      'content': '\n\n'.join(item['content'] for item in overview)}]
+                warnings.append('本次未命中具体章节，已回退到项目概述片段。')
         result['warnings'].extend(warnings)
         for item in result['sources']:
             item.update(origin='published', published_project=entry['name'])
