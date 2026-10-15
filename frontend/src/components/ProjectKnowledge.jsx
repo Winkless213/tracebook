@@ -61,9 +61,9 @@ export default function ProjectKnowledge({ onUnauthorized, onLogout }) {
     finally { setBusy(false); }
   };
   return <div className="knowledge-shell">
-    <header className="knowledge-topbar"><Brand /><nav className="support-topnav" aria-label="工作台导航"><a className="button subtle" href="/" aria-current="page"><Icon name="books" />项目知识</a><a className="button subtle" href="?view=support"><Icon name="support" />技术客服</a><button className="button subtle" disabled={busy} onClick={logout}><Icon name="logout" />退出</button></nav></header>
+    <header className="knowledge-topbar"><Brand /><nav className="support-topnav" aria-label="工作台导航"><a className="button subtle" href="/" aria-current="page"><Icon name="books" />知识库</a><a className="button subtle" href="?view=support"><Icon name="support" />技术客服</a><button className="button subtle" disabled={busy} onClick={logout}><Icon name="logout" />退出</button></nav></header>
     <main className="knowledge-main">
-      <header className="knowledge-intro"><div><h1>项目知识</h1><p>代码结构、历史决定与开发经验，按项目整理。</p></div><a className="button secondary" href="?view=support"><Icon name="support" size={19} />开始一次排查<Icon name="arrow" size={17} /></a></header>
+      <header className="knowledge-intro"><div><h1>知识库</h1><p>代码结构、历史决定与开发经验，按项目整理；供你和 AI 编码助手共用。遇到具体问题，进入技术客服。</p></div><a className="button secondary" href="?view=support"><Icon name="support" size={19} />开始一次排查<Icon name="arrow" size={17} /></a></header>
       {error && <div className="knowledge-error"><Notice>{error}</Notice><button className="button" onClick={() => refresh()}>重新连接</button></div>}
       {!data && !error ? <Spinner label="读取项目知识状态" /> : data && <KnowledgeOverview data={data} />}
       <footer className="knowledge-footer">采集与归纳由助手完成。这里查看项目覆盖和知识结果。</footer>

@@ -44,6 +44,13 @@ function mockApi(t, detail) {
     return detail(url, options);
   });
 }
+function mockChat(t) {
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    if (url === '/api/support/projects') return json({ projects: [], model_configured: true, analysis_timeout_ms: 255000 });
+    if (['/api/support/sessions', '/api/support/cases', '/api/support/conversations'].includes(url)) return json([]);
+    return json({ id: 'c1', status: 'ready', project_id: null, turns: [] });
+  });
+}
 
 test('知识首页项目卡片提供带项目身份的客服入口', () => {
   const html = renderToStaticMarkup(React.createElement(KnowledgeOverview, { data: { projects: [{ name: 'worker & helper', documents: [] }] } }));
@@ -231,7 +238,7 @@ test('咨询写入丢失响应后查询同一对话，不自动重发问题', as
   assert.equal(document.querySelector('[name="message"]').value, '');
 });
 
-test('开启联网查证后由客服自主检索，搜索提示词可留空', async t => {
+test('联网查证默认开启，由客服自主检索，搜索提示词可留空', async t => {
   browser.history.replaceState({}, '', '?view=support');
   let sent;
   let saved;
@@ -250,8 +257,7 @@ test('开启联网查证后由客服自主检索，搜索提示词可留空', as
   });
   await mount();
   const form = document.querySelector('form[aria-label="发送咨询"]');
-  await act(() => document.querySelector('.chat-web-toggle input').click());
-  await settle();
+  assert.equal(document.querySelector('.chat-web-toggle input').checked, true);
   form.elements.message.value = 'Python 最新稳定版是多少？';
   // 提示词留空也应能发送
   await act(() => form.dispatchEvent(new browser.Event('submit', { bubbles: true, cancelable: true })));
@@ -260,4 +266,63 @@ test('开启联网查证后由客服自主检索，搜索提示词可留空', as
   assert.equal(sent.search_query, '');
   assert.match(document.body.textContent, /3\.15\.0/);
   assert.match(document.body.textContent, /已检索/);
+});
+
+test('客服导航指向知识库，并说明关联项目后回答会引用项目知识', async t => {
+  browser.history.replaceState({}, '', '?view=support');
+  mockChat(t);
+  await mount();
+  assert.match(document.querySelector('.support-topnav a[href="/"]').textContent, /知识库/);
+  assert.match(document.body.textContent, /引用你的项目知识库/);
+});
+
+test('日常答疑与故障排查各有用途说明', async t => {
+  browser.history.replaceState({}, '', '?view=support');
+  mockChat(t);
+  await mount();
+  assert.match(document.body.textContent, /白话问用法/);
+  const diagnose = [...document.querySelectorAll('.support-mode-switch button')].find(item => item.textContent.includes('故障排查'));
+  await act(() => diagnose.click());
+  await settle();
+  assert.match(document.body.textContent, /带引用定位问题/);
+});
+
+test('联网查证默认开启并提示后端可能不稳定，不编造结果', async t => {
+  browser.history.replaceState({}, '', '?view=support');
+  mockChat(t);
+  await mount();
+  assert.match(document.body.textContent, /可能不稳定/);
+});
+
+test('点击依据编号会展开并滚动定位到对应证据', async () => {
+  const proto = browser.Element.prototype;
+  const original = proto.scrollIntoView;
+  const scrolled = [];
+  proto.scrollIntoView = function () { scrolled.push(this.id); };
+  try {
+    document.body.innerHTML = '<div id="root"></div>';
+    root = createRoot(document.getElementById('root'));
+    await act(() => root.render(React.createElement(SupportReport, { session: ready })));
+    await settle();
+    const link = document.querySelector('a[href="#support-evidence-L1"]');
+    assert.ok(link);
+    await act(() => link.click());
+    await settle();
+    assert.equal(document.getElementById('support-evidence-L1').open, true);
+    assert.deepEqual(scrolled, ['support-evidence-L1']);
+  } finally {
+    if (original) proto.scrollIntoView = original; else delete proto.scrollIntoView;
+  }
+});
+
+test('分析处理过程中显示已等待时长', async t => {
+  let resolvePost;
+  mockApi(t, (url, options) => { if (options.method === 'POST') return new Promise(resolve => { resolvePost = resolve; }); return json(initial); });
+  await mount();
+  const form = document.querySelector('form[aria-label="补充排查材料"]');
+  form.elements.product_version.value = 'v1';
+  await act(() => form.dispatchEvent(new browser.Event('submit', { bubbles: true, cancelable: true })));
+  assert.match(document.body.textContent, /已等待/);
+  await act(async () => { resolvePost(json(initial)); });
+  await settle();
 });

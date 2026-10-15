@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
 import * as m from 'motion/react-m';
 import { PlusIcon } from '@phosphor-icons/react/dist/csr/Plus';
@@ -51,6 +51,13 @@ export function Brand() {
 
 export function Spinner({ label = '加载中' }) {
   return <span className="loading-inline"><span className="spinner" aria-hidden="true" /><span>{label}</span></span>;
+}
+
+export function Elapsed() {
+  const start = useRef(Date.now());
+  const [, tick] = useState(0);
+  useEffect(() => { const id = setInterval(() => tick(count => count + 1), 1000); return () => clearInterval(id); }, []);
+  return <span className="support-elapsed">已等待 {Math.max(0, Math.floor((Date.now() - start.current) / 1000))} 秒</span>;
 }
 
 export function Notice({ children, tone = 'error', onDismiss, action }) {

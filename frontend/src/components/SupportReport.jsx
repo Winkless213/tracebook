@@ -24,7 +24,14 @@ export default function SupportReport({ session }) {
   const report = session.report;
   if (!report) return null;
   const confirmed = session.status === 'resolved' && report.confirmation?.resolved;
-  const showEvidence = event => { const item = document.getElementById(event.currentTarget.hash.slice(1)); if (item) item.open = true; };
+  const showEvidence = event => {
+    const item = document.getElementById(event.currentTarget.hash.slice(1));
+    if (!item) return;
+    item.open = true;
+    const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    item.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+    if (!reduce) { item.classList.add('support-evidence-flash'); setTimeout(() => item.classList.remove('support-evidence-flash'), 700); }
+  };
   return <Reveal as="section" className="support-report support-card" aria-label="排查报告">
     <div className="support-section-heading support-report-heading"><div className="support-report-title"><span className="support-report-mark"><Icon name="file" size={23} /></span><div><span className="eyebrow">排查结果</span><h2>问题分析报告</h2></div></div><a className="button secondary" href={`/api${supportPath(session.thread_id, 'export')}`} download><Icon name="download" size={16} />导出报告</a></div>
     {confirmed && <p className="support-confirmed"><Icon name="check" size={17} />已保存为确认案例</p>}

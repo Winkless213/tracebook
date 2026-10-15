@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { useSupportSession } from '../support-hooks.js';
 import { SUPPORT_STATUS, supplementError, supportTime } from '../lib/support.js';
-import { Icon, Notice, Reveal, Spinner } from './Ui.jsx';
+import { Elapsed, Icon, Notice, Reveal, Spinner } from './Ui.jsx';
 import SupportReport from './SupportReport.jsx';
 import SupportProgress from './SupportProgress.jsx';
 
@@ -52,7 +52,7 @@ export default function SupportSession({ threadId, settings, onUpdate, onUnautho
     {session && <>
       <header className="support-ticket-heading"><div className="support-ticket-meta"><span>{project?.name || (session.project_id ? '原项目暂不在列表' : '未关联项目')}</span><time>{supportTime(session.created_at)}</time><span className={`support-status ${session.status}`}>{SUPPORT_STATUS[session.status] || session.status}</span></div><h1>{session.symptom}</h1><div className="support-ticket-tools"><span className="support-muted">{session.product_version || '版本待补充'}</span><button className="button subtle" disabled={Boolean(busy || loading)} onClick={refresh}><Icon name="refresh" size={14} />检查最新状态</button></div></header>
       <SupportProgress status={session.status} />
-      {busy && <div className="support-processing" role="status"><span className="support-processing-bars" aria-hidden="true"><i /><i /><i /><i /></span><div><strong>正在处理这次排查</strong><p>请求已提交，请保持页面打开；分析可能需要几分钟。</p></div></div>}
+      {busy && <div className="support-processing" role="status"><span className="support-processing-bars" aria-hidden="true"><i /><i /><i /><i /></span><div><strong>正在处理这次排查</strong><p>请求已提交，请保持页面打开；分析可能需要几分钟。<Elapsed /></p></div></div>}
       {session.status === 'processing' && !busy && <Notice tone="info" action={<button className="inline-button" disabled={disabled || !settings.model_configured} onClick={() => write('retry')}>恢复处理</button>}>服务正在处理，页面会自动查询状态。长时间没有变化时可恢复处理。</Notice>}
       {session.status === 'failed' && <Notice action={<button className="inline-button" disabled={disabled || !settings.model_configured} onClick={() => write('retry')}>重试分析</button>}>{session.error || '分析未完成，材料已保存在会话中。'}</Notice>}
       {session.status === 'unresolved' && <Notice tone="warning">本次问题仍未解决。补充新的复现结果或日志，继续排查。</Notice>}
