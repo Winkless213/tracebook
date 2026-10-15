@@ -182,10 +182,30 @@ def _chat_message(reply='最新稳定版是 3.15.0', source_ids=None):
             {'reply': reply, 'source_ids': source_ids or [], 'needs_diagnosis': False})}]}
 
 
+def test_chat_prefers_gemini_while_analysis_keeps_deepseek_first(monkeypatch):
+    monkeypatch.setenv('SUPPORT_API_KEY', 'synthetic-test-key')
+    models = []
+
+    def gateway(request):
+        body = json.loads(request.content)
+        models.append(body['model'])
+        if body['model'] == 'gemini-3.8-flash-high':
+            return httpx.Response(503, json={'error': 'upstream'})
+        return httpx.Response(200, json={'status': 'completed', 'output': [_chat_message(reply='回落成功')]})
+
+    model = SupportModel(transport=httpx.MockTransport(gateway))
+    assert model.reply({'message': 'hi', 'evidence': []}, lambda *args: 1)['reply'] == '回落成功'
+    assert models == ['gemini-3.8-flash-high', 'deepseek-v4.1-flash']
+    models.clear()
+    with pytest.raises(RuntimeError):
+        model.analyze({'evidence': []}, lambda *args: 1)
+    assert models[0] == 'deepseek-v4.1-flash'
+
+
 def test_chat_tool_loop_searches_then_synthesizes_with_strict_schema_kept(monkeypatch):
     monkeypatch.setenv('SUPPORT_API_KEY', 'synthetic-test-key')
-    monkeypatch.setenv('SUPPORT_PRIMARY_MODEL', 'deepseek-v4.1-flash')
-    monkeypatch.setenv('SUPPORT_FALLBACK_MODEL', '')
+    monkeypatch.setenv('SUPPORT_CHAT_PRIMARY_MODEL', 'deepseek-v4.1-flash')
+    monkeypatch.setenv('SUPPORT_CHAT_FALLBACK_MODEL', '')
     requests, executed = [], []
 
     def gateway(request):
@@ -223,7 +243,7 @@ def test_chat_tool_loop_searches_then_synthesizes_with_strict_schema_kept(monkey
 
 def test_chat_without_tool_call_answers_directly_and_skips_search(monkeypatch):
     monkeypatch.setenv('SUPPORT_API_KEY', 'synthetic-test-key')
-    monkeypatch.setenv('SUPPORT_FALLBACK_MODEL', '')
+    monkeypatch.setenv('SUPPORT_CHAT_FALLBACK_MODEL', '')
     requests, executed = [], []
 
     def gateway(request):
@@ -243,7 +263,7 @@ def test_chat_without_tool_call_answers_directly_and_skips_search(monkeypatch):
 
 def test_chat_reply_without_tool_config_is_single_shot(monkeypatch):
     monkeypatch.setenv('SUPPORT_API_KEY', 'synthetic-test-key')
-    monkeypatch.setenv('SUPPORT_FALLBACK_MODEL', '')
+    monkeypatch.setenv('SUPPORT_CHAT_FALLBACK_MODEL', '')
     requests = []
 
     def gateway(request):
@@ -258,8 +278,8 @@ def test_chat_reply_without_tool_config_is_single_shot(monkeypatch):
 
 def test_transient_timeout_retries_same_model_without_falling_back(monkeypatch):
     monkeypatch.setenv('SUPPORT_API_KEY', 'synthetic-test-key')
-    monkeypatch.setenv('SUPPORT_PRIMARY_MODEL', 'deepseek-v4.1-flash')
-    monkeypatch.setenv('SUPPORT_FALLBACK_MODEL', 'gemini-3.8-flash-high')
+    monkeypatch.setenv('SUPPORT_CHAT_PRIMARY_MODEL', 'deepseek-v4.1-flash')
+    monkeypatch.setenv('SUPPORT_CHAT_FALLBACK_MODEL', 'gemini-3.8-flash-high')
     monkeypatch.setattr('devrag.support.model.time.sleep', lambda *_: None)
     models = []
 
@@ -276,7 +296,7 @@ def test_transient_timeout_retries_same_model_without_falling_back(monkeypatch):
 
 def test_empty_response_retries_same_model_then_succeeds(monkeypatch):
     monkeypatch.setenv('SUPPORT_API_KEY', 'synthetic-test-key')
-    monkeypatch.setenv('SUPPORT_FALLBACK_MODEL', '')
+    monkeypatch.setenv('SUPPORT_CHAT_FALLBACK_MODEL', '')
     monkeypatch.setattr('devrag.support.model.time.sleep', lambda *_: None)
     calls = []
 
@@ -303,5 +323,32 @@ def test_retry_attempts_are_bounded_then_fail(monkeypatch):
         raise httpx.ConnectTimeout('always down', request=request)
 
     with pytest.raises(RuntimeError, match='超时'):
-        SupportModel(transport=httpx.MockTransport(gateway)).reply({'message': 'hi', 'evidence': []}, lambda *args: 1)
+        SupportModel(transport=httpx.MockTransport(gateway)).analyze({'evidence': []}, lambda *args: 1)
     assert len(calls) == 3
+
+
+def test_chat_uses_lighter_budget_than_analysis(monkeypatch):
+    monkeypatch.setenv('SUPPORT_API_KEY', 'synthetic-test-key')
+    monkeypatch.setenv('SUPPORT_FALLBACK_MODEL', '')
+    monkeypatch.setenv('SUPPORT_CHAT_FALLBACK_MODEL', '')
+    monkeypatch.setattr('devrag.support.model.time.sleep', lambda *_: None)
+    bodies, timeouts = [], []
+
+    def gateway(request):
+        bodies.append(json.loads(request.content))
+        timeouts.append(request.extensions['timeout']['read'])
+        raise httpx.ReadTimeout('down', request=request)
+
+    model = SupportModel(transport=httpx.MockTransport(gateway))
+    with pytest.raises(RuntimeError, match='超时'):
+        model.reply({'message': 'hi', 'evidence': []}, lambda *args: 1)
+    assert len(bodies) == 2
+    assert {body['reasoning']['effort'] for body in bodies} == {'high'}
+    assert set(timeouts) == {60}
+    bodies.clear()
+    timeouts.clear()
+    with pytest.raises(RuntimeError, match='超时'):
+        model.analyze({'evidence': []}, lambda *args: 1)
+    assert len(bodies) == 3
+    assert {body['reasoning']['effort'] for body in bodies} == {'max'}
+    assert set(timeouts) == {120}

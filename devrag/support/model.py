@@ -81,19 +81,26 @@ class SupportModel:
         self.fallback = os.getenv('SUPPORT_FALLBACK_MODEL', ALLOWED_MODELS[1])
         self.timeout = float(os.getenv('SUPPORT_TIMEOUT', '120'))
         self.max_attempts = max(1, int(os.getenv('SUPPORT_MAX_ATTEMPTS', '3')))
+        # 日常答疑不需要诊断级推理；降档+更短超时+更少重试，把单轮等待压到群机器人量级。
+        self.chat_effort = os.getenv('SUPPORT_CHAT_REASONING_EFFORT', 'high')
+        self.chat_timeout = float(os.getenv('SUPPORT_CHAT_TIMEOUT', '60'))
+        self.chat_max_attempts = max(1, int(os.getenv('SUPPORT_CHAT_MAX_ATTEMPTS', '2')))
+        # 2026-10-15 验收中网关上 DS 连续 502/503 且每次空等 30s 以上，答疑改为 Gemini 优先；排查仍 DS 优先。
+        self.chat_primary = os.getenv('SUPPORT_CHAT_PRIMARY_MODEL', ALLOWED_MODELS[1])
+        self.chat_fallback = os.getenv('SUPPORT_CHAT_FALLBACK_MODEL', ALLOWED_MODELS[0])
         self.transport = transport
         if self.base != GATEWAY:
             raise ValueError('客服只允许已指定的 ciyuan 网关')
-        if self.primary not in ALLOWED_MODELS or self.fallback not in ('', *ALLOWED_MODELS):
+        if {self.primary, self.chat_primary} - set(ALLOWED_MODELS) or {self.fallback, self.chat_fallback} - {'', *ALLOWED_MODELS}:
             raise ValueError('客服只支持当前已验证的两种模型配置')
         # 分开声明推理档位，避免把不同模型的参数当成同一种协议。
         # DS 仅凭提示词约 1/5 次输出纯正文，严格 json_schema 实测稳定；Gemini 收到格式参数会把 schema 字段混进输出。
         ds_effort = os.getenv('SUPPORT_DEEPSEEK_REASONING_EFFORT', 'max')
         gemini_effort = os.getenv('SUPPORT_GEMINI_REASONING_EFFORT', 'max')
         self.profiles = {
-            ALLOWED_MODELS[0]: lambda schema: {'reasoning': {'effort': ds_effort}, 'text': {'format': {
+            ALLOWED_MODELS[0]: lambda schema, effort: {'reasoning': {'effort': effort or ds_effort}, 'text': {'format': {
                 'type': 'json_schema', 'name': schema.__name__, 'schema': _strict_schema(schema.model_json_schema()), 'strict': True}}},
-            ALLOWED_MODELS[1]: lambda schema: {'reasoning': {'effort': gemini_effort}},
+            ALLOWED_MODELS[1]: lambda schema, effort: {'reasoning': {'effort': effort or gemini_effort}},
         }
 
     @property
@@ -101,18 +108,19 @@ class SupportModel:
         return bool(self.key)
 
     def analyze(self, payload, record):
-        return self._generate(payload, record, SUPPORT_SYSTEM, Analysis)
+        return self._generate(payload, record, SUPPORT_SYSTEM, Analysis, models=(self.primary, self.fallback))
 
     def reply(self, payload, record, tool=None, tool_executor=None):
-        return self._generate(payload, record, CHAT_SYSTEM, ChatReply, tool, tool_executor)
+        return self._generate(payload, record, CHAT_SYSTEM, ChatReply, tool, tool_executor, models=(self.chat_primary, self.chat_fallback),
+                              effort=self.chat_effort, timeout=self.chat_timeout, max_attempts=self.chat_max_attempts)
 
-    def _post(self, model, instructions, input_value, schema, tool, tool_choice):
+    def _post(self, model, instructions, input_value, schema, tool, tool_choice, effort=None, timeout=None):
         body = {'model': model, 'instructions': instructions, 'input': input_value,
-                'max_output_tokens': 16000, 'store': False, 'stream': False, **self.profiles[model](schema)}
+                'max_output_tokens': 16000, 'store': False, 'stream': False, **self.profiles[model](schema, effort)}
         if tool:
             body['tools'] = [tool]
             body['tool_choice'] = tool_choice
-        with httpx.Client(timeout=httpx.Timeout(self.timeout, connect=10), follow_redirects=False, transport=self.transport) as client:
+        with httpx.Client(timeout=httpx.Timeout(timeout or self.timeout, connect=10), follow_redirects=False, transport=self.transport) as client:
             response = client.post(self.base + '/responses', headers={'Authorization': 'Bearer ' + self.key}, json=body)
         response.raise_for_status()
         return response.json()
@@ -122,18 +130,18 @@ class SupportModel:
         raw = data.get('usage') or {}
         return {'input_tokens': raw.get('input_tokens'), 'output_tokens': raw.get('output_tokens')}
 
-    def _generate(self, payload, record, system, schema, tool=None, tool_executor=None):
+    def _generate(self, payload, record, system, schema, tool=None, tool_executor=None, models=(), effort=None, timeout=None, max_attempts=None):
         if not self.configured:
             raise RuntimeError('服务器未配置客服模型，需要 HTTPS 网关地址与 SUPPORT_API_KEY')
         instructions = system + json.dumps(_prompt_schema(schema.model_json_schema()), ensure_ascii=False)
         model_input = json.dumps(payload, ensure_ascii=False)
         error = '客服模型请求失败'
-        for model in dict.fromkeys(filter(None, [self.primary, self.fallback])):
+        for model in dict.fromkeys(filter(None, models)):
             attempt = record(model, None, None, 0, {}, None)
             started, usage = time.monotonic(), {}
-            for try_no in range(1, self.max_attempts + 1):
+            for try_no in range(1, (max_attempts or self.max_attempts) + 1):
                 try:
-                    data = self._post(model, instructions, model_input, schema, tool, 'auto' if tool else None)
+                    data = self._post(model, instructions, model_input, schema, tool, 'auto' if tool else None, effort, timeout)
                     usage = self._usage(data)
                     # 单轮工具回路：模型自主发起 web_search，应用侧执行后回填，再让模型综合（tool_choice=none）。
                     if tool and tool_executor:
@@ -149,7 +157,7 @@ class SupportModel:
                                                'name': call.get('name'), 'arguments': call.get('arguments')})
                                 replay.append({'type': 'function_call_output', 'call_id': call.get('call_id'),
                                                'output': json.dumps(tool_executor(args), ensure_ascii=False)})
-                            data = self._post(model, instructions, replay, schema, tool, 'none')
+                            data = self._post(model, instructions, replay, schema, tool, 'none', effort, timeout)
                             usage = self._usage(data) or usage
                     content = self._output_text(data)
                     content = re.sub(r'^```(?:json)?\s*|\s*```$', '', content.strip())
@@ -164,7 +172,7 @@ class SupportModel:
                         error = str(exc)
                     else:
                         error = '客服模型连接失败，请稍后重试'
-                    if try_no < self.max_attempts:
+                    if try_no < (max_attempts or self.max_attempts):
                         time.sleep(min(0.5 * 2 ** (try_no - 1), 4) + random.uniform(0, 0.25))
                         continue
                 except httpx.HTTPStatusError as exc:
