@@ -4,6 +4,8 @@
 
 单人项目：FastAPI + SQLite 后端，React 前端，LangGraph 编排客服流程。
 
+![检索与证据面板（导入 Tracebook 自身代码后的检索结果）](docs/images/search.png)
+
 ## 功能
 
 **项目知识库**
