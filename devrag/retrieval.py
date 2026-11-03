@@ -142,8 +142,8 @@ class Retriever:
         reordered = iter(sorted(zip((float(score) for score in scores), movable), reverse=True))
         return [entry if corpus[entry[1]].get('origin') else next(reordered) for entry in candidates]
 
-    def search(self, pid, question, sid=None, top_k=6, baseline=False, method=None):
-        method = 'term-overlap' if baseline else method or self.method
+    def search(self, pid, question, sid=None, top_k=6, method=None):
+        method = method or self.method
         self.check(method)
         snapshot = self.store.resolve(pid, sid)
         corpus, tokens, index = self.index(snapshot['id'], pid if snapshot['active'] else None)
