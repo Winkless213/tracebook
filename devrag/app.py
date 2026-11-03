@@ -18,7 +18,8 @@ from .distill import Distiller, HistoryWorker
 from .history import DistillRequest, HistoryProject, HistoryStore, SyncBatch
 from .llm import LLM
 from .models import Bundle, Question, Search, Strict
-from .retrieval import Retriever
+from .retrieval import VECTOR_METHODS, Retriever
+from .semantic import LocalModels
 from .store import Store
 from .support import SupportService
 from .support.api import support_router
@@ -65,7 +66,9 @@ def create_app(data_dir=None, model=None, start_worker=True, distill_model=None,
     root = Path(data_dir or os.getenv('DATA_DIR', './data'))
     root.mkdir(parents=True, exist_ok=True)
     store = Store(root / 'knowledge.sqlite')
-    retriever, auth, llm = Retriever(store), Auth(), model or LLM()
+    method = os.getenv('RETRIEVAL_METHOD', 'bm25-symbol')
+    models = LocalModels(os.getenv('FASTEMBED_CACHE_DIR') or root / 'models') if method in VECTOR_METHODS else None
+    retriever, auth, llm = Retriever(store, method, models), Auth(), model or LLM()
     worker, stop = Worker(store, retriever, llm), threading.Event()
     history, distiller = HistoryStore(store), distill_model or Distiller()
     history_worker = HistoryWorker(history, distiller)

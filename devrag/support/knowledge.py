@@ -19,6 +19,7 @@ class PublishedSnapshot(Retriever):
     # 复用现有排序与引用预算，发布文件只在本次请求内建索引，不复制或改写知识库。
     def __init__(self, snapshot, corpus):
         self.store, self.snapshot, self.corpus = self, snapshot, corpus
+        self.method, self.models = 'bm25-symbol', None
 
     def resolve(self, pid, sid=None):
         return self.snapshot

@@ -2,6 +2,7 @@
 import argparse
 import json
 import math
+import os
 import re
 import statistics
 import sys
@@ -13,12 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from devrag.indexing import kind_for
 from devrag.llm import LLM
 from devrag.models import Bundle
-from devrag.retrieval import Retriever
+from devrag.retrieval import METHODS, VECTOR_METHODS, Retriever
+from devrag.semantic import LocalModels
 from devrag.store import Store
 from devrag.worker import Worker
 
 EVALUATION = Path(__file__).resolve().parents[1] / 'evaluation'
-METHODS = {'term-overlap': {'baseline': True}, 'bm25-symbol': {}}
 REFERENCE = 'bm25-symbol'
 
 
@@ -133,7 +134,7 @@ def table(summary):
     return '\n'.join(lines)
 
 
-def evaluate(bundle_dir, output, answers=False, ids=None, methods=tuple(METHODS)):
+def evaluate(bundle_dir, output, answers=False, ids=None, methods=METHODS, models_dir=None):
     if output.exists():
         raise SystemExit('输出已存在，保留旧结果并改用新文件')
     questions = json.loads((EVALUATION / 'questions.json').read_text(encoding='utf-8'))
@@ -149,7 +150,7 @@ def evaluate(bundle_dir, output, answers=False, ids=None, methods=tuple(METHODS)
     with tempfile.TemporaryDirectory() as directory:
         store = Store(Path(directory) / 'eval.sqlite')
         projects = {repo: store.ingest(bundle)['project']['id'] for repo, bundle in bundles.items()}
-        retriever = Retriever(store)
+        retriever = Retriever(store, models=LocalModels(models_dir) if VECTOR_METHODS & set(methods) else None)
         worker = Worker(store, retriever, LLM()) if answers else None
         for question in questions:
             pid = projects[question['repo']]
@@ -157,7 +158,7 @@ def evaluate(bundle_dir, output, answers=False, ids=None, methods=tuple(METHODS)
             if question['category'] != 'D':
                 for method in methods:
                     started = time.monotonic()
-                    search = retriever.search(pid, question['question'], **METHODS[method])
+                    search = retriever.search(pid, question['question'], method=method)
                     sources = [{key: source[key] for key in ('path', 'start_line', 'end_line', 'score')} for source in search['sources']]
                     modes[method] = {**score(question, sources), 'retrieval_ms': round((time.monotonic() - started) * 1000), 'sources': sources}
             row = {**question, 'retrieval': modes}
@@ -182,8 +183,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--bundles', type=Path, required=True, help='按 corpora.json 导出的快照目录，每个仓库一份 <仓库名>.json')
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--methods', nargs='+', choices=list(METHODS), default=list(METHODS))
+    parser.add_argument('--methods', nargs='+', choices=METHODS, default=list(METHODS))
+    parser.add_argument('--models-dir', type=Path, default=os.getenv('FASTEMBED_CACHE_DIR'), help='fastembed 模型缓存目录，向量类方法才用到')
     parser.add_argument('--answers', action='store_true')
     parser.add_argument('--ids', nargs='+')
     args = parser.parse_args()
-    evaluate(args.bundles, args.output, args.answers, args.ids, args.methods)
+    evaluate(args.bundles, args.output, args.answers, args.ids, args.methods, args.models_dir)

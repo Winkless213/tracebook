@@ -39,6 +39,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,question_id TEXT,kind TEXT,message TEXT,created_at TEXT);
                 CREATE INDEX IF NOT EXISTS event_question ON events(question_id,id);
                 CREATE TABLE IF NOT EXISTS attempts(id INTEGER PRIMARY KEY,question_id TEXT,model TEXT,status TEXT,latency_ms INTEGER,input_tokens INTEGER,output_tokens INTEGER,error TEXT);
+                CREATE TABLE IF NOT EXISTS embeddings(model TEXT,sha256 TEXT,vector BLOB,PRIMARY KEY(model,sha256));
             ''')
 
     @contextmanager
@@ -107,6 +108,16 @@ class Store:
     def corpus(self, sid):
         with self.db() as db:
             return [json.loads(row[0]) for row in db.execute('SELECT body FROM chunks WHERE snapshot_id=? ORDER BY id', (sid,))]
+
+    def embeddings(self, model, keys):
+        """按（模型, 嵌入文本的 sha256）取缓存的 float32 向量字节。"""
+        wanted = set(keys)
+        with self.db() as db:
+            return {row[0]: row[1] for row in db.execute('SELECT sha256,vector FROM embeddings WHERE model=?', (model,)) if row[0] in wanted}
+
+    def save_embeddings(self, model, items):
+        with self.db() as db:
+            db.executemany('INSERT OR IGNORE INTO embeddings VALUES(?,?,?)', [(model, key, vector) for key, vector in items])
 
     def source(self, sid, path):
         with self.db() as db:
