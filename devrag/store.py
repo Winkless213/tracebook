@@ -35,12 +35,16 @@ class Store:
                 CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY,snapshot_id TEXT,body TEXT);
                 CREATE INDEX IF NOT EXISTS chunk_snap ON chunks(snapshot_id);
                 CREATE TABLE IF NOT EXISTS questions(id TEXT PRIMARY KEY,project_id TEXT,snapshot_id TEXT,question TEXT,status TEXT,idem TEXT UNIQUE,fingerprint TEXT,
-                    sources TEXT NOT NULL DEFAULT '[]',result TEXT,error TEXT,latency_ms INTEGER DEFAULT 0,recovery_count INTEGER DEFAULT 0,created_at TEXT,updated_at TEXT);
+                    sources TEXT NOT NULL DEFAULT '[]',result TEXT,error TEXT,latency_ms INTEGER DEFAULT 0,recovery_count INTEGER DEFAULT 0,created_at TEXT,updated_at TEXT,method TEXT);
                 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,question_id TEXT,kind TEXT,message TEXT,created_at TEXT);
                 CREATE INDEX IF NOT EXISTS event_question ON events(question_id,id);
                 CREATE TABLE IF NOT EXISTS attempts(id INTEGER PRIMARY KEY,question_id TEXT,model TEXT,status TEXT,latency_ms INTEGER,input_tokens INTEGER,output_tokens INTEGER,error TEXT);
                 CREATE TABLE IF NOT EXISTS embeddings(model TEXT,sha256 TEXT,vector BLOB,PRIMARY KEY(model,sha256));
             ''')
+            if 'method' not in {row[1] for row in db.execute('PRAGMA table_info(questions)')}:
+                # 旧库补列；已有问题沿用原来固定显示的 bm25-symbol。
+                db.execute('ALTER TABLE questions ADD COLUMN method TEXT')
+                db.execute("UPDATE questions SET method='bm25-symbol'")
 
     @contextmanager
     def db(self):
@@ -180,7 +184,7 @@ class Store:
         usage = {key: sum(item[key] or 0 for item in attempts) for key in ['input_tokens', 'output_tokens']}
         usage['total_tokens'] = sum(usage.values())
         usage['unreported_calls'] = sum(item['input_tokens'] is None for item in attempts)
-        data.update(events=events, attempts=attempts, usage=usage, commit=snap['commit'], origin=snap['origin'], stale=not snap['active'], method='bm25-symbol')
+        data.update(events=events, attempts=attempts, usage=usage, commit=snap['commit'], origin=snap['origin'], stale=not snap['active'])
         return data
 
     def questions(self, pid):
@@ -201,7 +205,7 @@ class Store:
         return row[0] if row else None
 
     def update(self, identifier, **values):
-        allowed = {'status', 'sources', 'result', 'error', 'latency_ms'}
+        allowed = {'status', 'sources', 'result', 'error', 'latency_ms', 'method'}
         if not values.keys() <= allowed:
             raise ValueError('unsupported update')
         values = {key: encode(value) if key in {'sources', 'result'} else value for key, value in values.items()}

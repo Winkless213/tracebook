@@ -7,6 +7,7 @@ from devrag.app import create_app
 from devrag.retrieval import Retriever, fuse
 from devrag.semantic import LocalModels
 from devrag.store import Store
+from devrag.worker import Worker
 
 FILES = {'cache.py': 'def put(key):\n    """写入 Redis，30 秒后失效。"""\n    return key\n',
          'pay.py': 'def refund(order):\n    """退款前检查重复请求。"""\n    return order\n'}
@@ -104,6 +105,22 @@ def test_reranker_scores_one_pair_at_a_time():
     models.reranker = CrossEncoder()
     assert models.rerank('问题', ['a', 'b']) == [0.5, 0.5]
     assert sizes == [1]
+
+
+def test_questions_record_the_retrieval_method_they_used(tmp_path):
+    store, pid = project(tmp_path)
+    job = store.create_question(pid, '缓存保留多长时间？', 'method-check-1')
+    assert job['method'] is None
+    Worker(store, Retriever(store, 'hybrid', FakeModels()), FakeModel()).process_next()
+    assert store.question(job['id'])['method'] == 'hybrid'
+
+
+def test_old_databases_keep_showing_bm25_for_existing_questions(tmp_path):
+    store, pid = project(tmp_path)
+    job = store.create_question(pid, '缓存保留多长时间？', 'method-check-2')
+    with store.db() as db:
+        db.execute('ALTER TABLE questions DROP COLUMN method')
+    assert Store(tmp_path / 'kb.sqlite').question(job['id'])['method'] == 'bm25-symbol'
 
 
 def test_app_rejects_an_unknown_retrieval_method(tmp_path, monkeypatch):

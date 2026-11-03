@@ -17,8 +17,9 @@ class Worker:
             if question['sources']:
                 sources = question['sources']
             else:
-                sources = self.retriever.search(question['project_id'], question['question'], question['snapshot_id'])['sources']
-                self.store.update(identifier, sources=sources)
+                found = self.retriever.search(question['project_id'], question['question'], question['snapshot_id'])
+                sources = found['sources']
+                self.store.update(identifier, sources=sources, method=found['method'])
                 self.store.event(identifier, 'retrieved', f'已保存 {len(sources)} 条证据，引用固定于原快照')
             def cancelled():
                 return self.stop.is_set() or self.store.question(identifier)['status'] == 'cancelled'
