@@ -1,0 +1,17 @@
+{
+  "tracebook": {
+    "url": "https://github.com/Winkless213/tracebook",
+    "commit": "c73a677d4b17acb9a781eadcd7287febd8c13c55",
+    "exclude": ["evaluation/"]
+  },
+  "container-loading-planner": {
+    "url": "https://github.com/Winkless213/container-loading-planner",
+    "commit": "dd6d877aec946909a37cd7cad90e311a61dd3026",
+    "exclude": []
+  },
+  "doc-studio": {
+    "url": "https://github.com/Winkless213/doc-studio",
+    "commit": "b80980af9879e6765ca0220d62267229aa0b0e98",
+    "exclude": []
+  }
+}

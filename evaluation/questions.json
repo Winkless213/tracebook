@@ -1,6 +1,1005 @@
 [
-  {"id":"q01","question":"检索用的是什么算法？一次最多返回几个片段，证据预算多少字符？","paths":["devrag/retrieval.py"],"expected":"BM25Okapi 加符号匹配；默认 top_k=6，证据预算 24000 字符"},
-  {"id":"q02","question":"技术客服的排查流程在哪里暂停等用户补充资料，状态怎么持久化？","paths":["devrag/support/service.py"],"expected":"LangGraph StateGraph，interrupt 暂停等待补充或确认，SqliteSaver 持久化检查点"},
-  {"id":"q03","question":"发给模型之前，日志里的哪些敏感内容会被脱敏？","paths":["devrag/support/redact.py"],"expected":"私钥、Authorization、Cookie、凭据赋值、URL 内凭据、sk-/ghp_ 等前缀令牌、Bearer、JWT、长令牌、邮箱"},
-  {"id":"q04","question":"Tracebook 支持向量检索和多人权限吗？","paths":[],"expected_status":"insufficient","expected":"资料未提供相关实现，应说明证据不足"}
+  {
+    "id": "tb01",
+    "repo": "tracebook",
+    "category": "A",
+    "question": "检索时 comparison_order 在什么条件下会启用？启用后排序有什么不同？",
+    "expected": "非基线模式且问题同时含「代码」和「文档」时启用；从命中文档里提取类名和下划线函数名，给符号对得上的代码片段加分，把两段最相关的代码和一段关联文档排在最前",
+    "evidence": [
+      {
+        "path": "devrag/retrieval.py",
+        "start": 93,
+        "end": 95,
+        "quote": "if not baseline and '代码' in question and '文档' in question:"
+      },
+      {
+        "path": "devrag/retrieval.py",
+        "start": 37,
+        "end": 50,
+        "quote": "values[number] = values.get(number, 0) + len(matches) * 5"
+      },
+      {
+        "path": "docs/PROJECT-GUIDE.md",
+        "start": 21,
+        "end": 21,
+        "quote": "额外沿命中文档里出现的类/函数符号查找对应实现"
+      }
+    ]
+  },
+  {
+    "id": "tb02",
+    "repo": "tracebook",
+    "category": "A",
+    "question": "mask_data 开启 preserve_provenance 时哪些字段不脱敏？为什么？",
+    "expected": "只有 commit、sha256、snapshot_id 三个字段且值为 40–64 位十六进制时原样保留，其余照常脱敏；避免长令牌规则抹掉哈希，保证引用可回查",
+    "evidence": [
+      {
+        "path": "devrag/support/redact.py",
+        "start": 60,
+        "end": 63,
+        "quote": "key in ('commit', 'sha256', 'snapshot_id')"
+      }
+    ]
+  },
+  {
+    "id": "tb03",
+    "repo": "tracebook",
+    "category": "A",
+    "question": "客服模型调用里的 _RetryableOutput 什么时候抛出？和其他失败的处理有什么不同？",
+    "expected": "模型返回成功状态但正文为空时抛出，按瞬时故障处理：和连接错误、超时一样对同一模型指数退避重试，次数用完才换下一个模型；结构错误等确定性失败不重试、直接换模型，401/403 直接终止",
+    "evidence": [
+      {
+        "path": "devrag/support/model.py",
+        "start": 12,
+        "end": 13,
+        "quote": "网关瞬时故障（如 200 空响应）：可对同一模型退避重试，区别于确定性失败。"
+      },
+      {
+        "path": "devrag/support/model.py",
+        "start": 167,
+        "end": 177,
+        "quote": "仅瞬时故障退避重试同一模型；耗尽后回落下一模型。"
+      }
+    ]
+  },
+  {
+    "id": "tb04",
+    "repo": "tracebook",
+    "category": "A",
+    "question": "split_file 切 Markdown 文件时，代码块里以 # 开头的行会被当成分段标题吗？",
+    "expected": "不会。遇到以 ``` 开头的行就切换 in_fence，只有不在代码块里、以 # 开头的行才作为分段边界。",
+    "evidence": [
+      {
+        "path": "devrag/indexing.py",
+        "start": 32,
+        "end": 38,
+        "quote": "if not in_fence and text.startswith('#'):"
+      }
+    ]
+  },
+  {
+    "id": "tb05",
+    "repo": "tracebook",
+    "category": "A",
+    "question": "git_export.py 的 export 遇到多大的文件会跳过？跳过时记录的原因是什么？",
+    "expected": "原始内容超过 150000 字节就跳过，记入 excluded，原因是“文件过大”。",
+    "evidence": [
+      {
+        "path": "devrag/git_export.py",
+        "start": 27,
+        "end": 30,
+        "quote": "excluded.append({'path': path, 'reason': '文件过大'})"
+      }
+    ]
+  },
+  {
+    "id": "tb06",
+    "repo": "tracebook",
+    "category": "A",
+    "question": "APP_RELEASE 没设置时用 docker compose 启动会怎样？设置后这个值最终在哪里能看到？",
+    "expected": "未设置时 compose 直接报错拒绝启动；设置后作为镜像标签和构建参数写进镜像，运行时由健康检查和信息接口返回（本地未设置时为 dev）",
+    "evidence": [
+      {
+        "path": "compose.yaml",
+        "start": 3,
+        "end": 7,
+        "quote": "image: tracebook:${APP_RELEASE:?set APP_RELEASE to a verified Git commit}"
+      },
+      {
+        "path": "devrag/app.py",
+        "start": 132,
+        "end": 141,
+        "quote": "'release': os.getenv('APP_RELEASE', 'dev')"
+      },
+      {
+        "path": "README.md",
+        "start": 40,
+        "end": 40,
+        "quote": "`APP_RELEASE` 未设置时 compose 直接报错"
+      }
+    ]
+  },
+  {
+    "id": "tb07",
+    "repo": "tracebook",
+    "category": "B",
+    "question": "登录密码连续输错会被锁吗？要等多久才能再试？",
+    "expected": "5 分钟内累计 10 次失败后拒绝登录，最早的失败记录满 5 分钟过期后才能再试；登录成功清空计数",
+    "evidence": [
+      {
+        "path": "devrag/auth.py",
+        "start": 16,
+        "end": 24,
+        "quote": "raise ValueError('尝试过多，请5分钟后重试')"
+      }
+    ]
+  },
+  {
+    "id": "tb08",
+    "repo": "tracebook",
+    "category": "B",
+    "question": "登录后的会话凭据存在哪里？页面脚本能读到吗，别的网站能借它发请求吗？",
+    "expected": "存在 HttpOnly Cookie 里，页面脚本读不到；Cookie 设 SameSite=Strict，跨站请求不会带上；所有 POST 还必须带 X-Requested-With: Tracebook 头，否则返回 403；有效期 8 小时，HTTPS 下加 Secure",
+    "evidence": [
+      {
+        "path": "devrag/app.py",
+        "start": 100,
+        "end": 107,
+        "quote": "request.headers.get('X-Requested-With') != 'Tracebook'"
+      },
+      {
+        "path": "devrag/app.py",
+        "start": 154,
+        "end": 154,
+        "quote": "httponly=True, samesite='strict'"
+      },
+      {
+        "path": "API-CONTRACT.md",
+        "start": 3,
+        "end": 3,
+        "quote": "所有 POST 加 `X-Requested-With: Tracebook`"
+      }
+    ]
+  },
+  {
+    "id": "tb09",
+    "repo": "tracebook",
+    "category": "B",
+    "question": "后台正在处理的问题，如果服务被强制中断，重启后会怎样？",
+    "expected": "第一次被中断的问题在重启时重新排队，沿用原快照和已保存的证据；第二次中断直接标记失败；进行中的模型调用标为 interrupted、上游用量未知，并提示未返回的请求可能重复计费",
+    "evidence": [
+      {
+        "path": "devrag/store.py",
+        "start": 218,
+        "end": 226,
+        "quote": "THEN 'queued' ELSE 'failed' END"
+      },
+      {
+        "path": "docs/OPERATIONS.md",
+        "start": 50,
+        "end": 50,
+        "quote": "处理中问题恢复一次，仍固定原快照；第二次中断会failed。"
+      },
+      {
+        "path": "docs/PROJECT-GUIDE.md",
+        "start": 25,
+        "end": 25,
+        "quote": "重启只自动恢复一次，再中断则转失败"
+      }
+    ]
+  },
+  {
+    "id": "tb10",
+    "repo": "tracebook",
+    "category": "B",
+    "question": "模型给出的回答里，引用的原文和证据对不上时会怎么处理？",
+    "expected": "validate_answer 检查每条 quote 是否逐字出现在对应编号的片段里，不匹配就抛错；这个模型的结果不采纳并记为失败，再换备用模型，全部失败则问题失败。",
+    "evidence": [
+      {
+        "path": "devrag/llm.py",
+        "start": 55,
+        "end": 65,
+        "quote": "raise ValueError('引用原文不匹配')"
+      },
+      {
+        "path": "README.md",
+        "start": 11,
+        "end": 11,
+        "quote": "每条结论必须引用真实片段并逐字匹配原文，校验不过不展示"
+      }
+    ]
+  },
+  {
+    "id": "tb11",
+    "repo": "tracebook",
+    "category": "B",
+    "question": "联网搜索会把网页全文读进来吗，还是只用搜索摘要？",
+    "expected": "只对白名单里的公开文档站读正文，每次搜索最多读 2 个页面，按查询词挑最相关的两段片段；其他结果只保留搜索摘要并标为摘要，最多返回 4 条",
+    "evidence": [
+      {
+        "path": "devrag/support/web.py",
+        "start": 11,
+        "end": 16,
+        "quote": "首版只读取这些公开文档站的正文，其他搜索结果保留为明确标注的摘要。"
+      },
+      {
+        "path": "devrag/support/web.py",
+        "start": 58,
+        "end": 64,
+        "quote": "if parsed.netloc in DOCUMENT_HOSTS and pages < 2:"
+      }
+    ]
+  },
+  {
+    "id": "tb12",
+    "repo": "tracebook",
+    "category": "B",
+    "question": "会话经验提炼时，如果模型输出被截断或者流没有正常结束，结果还会被采用吗？",
+    "expected": "不会：以长度限制结束、没有正常结束、流中报错、超时或输出超过上限都直接报错，不采纳部分结果；任务记为失败，输入保留可稍后续跑",
+    "evidence": [
+      {
+        "path": "devrag/distill.py",
+        "start": 83,
+        "end": 88,
+        "quote": "raise RuntimeError('模型服务因输出长度限制截断了提炼，未采纳不完整结果')"
+      },
+      {
+        "path": "docs/OPERATIONS.md",
+        "start": 32,
+        "end": 32,
+        "quote": "未完成的流不作为成功结果"
+      }
+    ]
+  },
+  {
+    "id": "tb13",
+    "repo": "tracebook",
+    "category": "B",
+    "question": "点开证据看完整原文件时，命中的那几行会怎么标出来？里面的代码会被执行吗？",
+    "expected": "切到原文件时按快照读取完整文件逐行渲染行号，落在命中起止行内的行加高亮并自动滚动到第一处；内容按文本放在 pre/code 里展示，不执行",
+    "evidence": [
+      {
+        "path": "frontend/src/components/Evidence.jsx",
+        "start": 57,
+        "end": 74,
+        "quote": "line.number >= source.start_line && line.number <= source.end_line"
+      },
+      {
+        "path": "API-CONTRACT.md",
+        "start": 20,
+        "end": 20,
+        "quote": "原文按行显示，可突出命中 start_line/end_line，不执行代码"
+      }
+    ]
+  },
+  {
+    "id": "tb14",
+    "repo": "tracebook",
+    "category": "C",
+    "question": "README 说检索最多返回 6 个片段、证据预算 24000 字符，代码里是怎么执行的？同一个文件最多能占几个片段？",
+    "expected": "问答用默认 6 个，检索接口可请求 1–10 个；预算按片段长度递减，放不下的片段跳过而不是截断；同一文件最多 3 个片段",
+    "evidence": [
+      {
+        "path": "README.md",
+        "start": 10,
+        "end": 10,
+        "quote": "最多 6 个片段、24,000 字符证据预算"
+      },
+      {
+        "path": "devrag/retrieval.py",
+        "start": 96,
+        "end": 105,
+        "quote": "if paths.get(item['path'], 0) >= 3 or len(item['content']) > budget:"
+      },
+      {
+        "path": "devrag/models.py",
+        "start": 85,
+        "end": 89,
+        "quote": "top_k: int = Field(default=6, ge=1, le=10)"
+      }
+    ]
+  },
+  {
+    "id": "tb15",
+    "repo": "tracebook",
+    "category": "C",
+    "question": "接口文档说导入快照最多 200 个文件、总文本 2MB、请求 3MB，代码里真是这样限制的吗？",
+    "expected": "一致：Bundle 模型限制 files 最多 200 个、UTF-8 文本总量不超过 2,000,000 字节；中间件读取 POST 请求体超过 3,000,000 字节直接返回 413。",
+    "evidence": [
+      {
+        "path": "API-CONTRACT.md",
+        "start": 11,
+        "end": 11,
+        "quote": "最多200文件、总文本2MB，请求3MB"
+      },
+      {
+        "path": "README.md",
+        "start": 61,
+        "end": 61,
+        "quote": "单份快照上限 200 个文本文件、2MB"
+      },
+      {
+        "path": "devrag/models.py",
+        "start": 53,
+        "end": 69,
+        "quote": "files: list[SourceFile] = Field(min_length=1, max_length=200)"
+      },
+      {
+        "path": "devrag/app.py",
+        "start": 47,
+        "end": 54,
+        "quote": "if size > 3_000_000:"
+      }
+    ]
+  },
+  {
+    "id": "tb16",
+    "repo": "tracebook",
+    "category": "C",
+    "question": "README 说客服模型第一轮 tool_choice=auto、搜索后第二轮 tool_choice=none，代码里是这样传参的吗？",
+    "expected": "一致：_generate 第一次调用 _post 时有工具就传 'auto'；模型发起 function_call 后由应用执行搜索并以 function_call_output 回填，再用 'none' 请求一次让模型综合作答。",
+    "evidence": [
+      {
+        "path": "README.md",
+        "start": 15,
+        "end": 15,
+        "quote": "第一轮 `tool_choice=auto`，搜索后第二轮 `tool_choice=none` 综合作答"
+      },
+      {
+        "path": "devrag/support/model.py",
+        "start": 142,
+        "end": 161,
+        "quote": "replay, schema, tool, 'none', effort, timeout)"
+      }
+    ]
+  },
+  {
+    "id": "tb17",
+    "repo": "tracebook",
+    "category": "C",
+    "question": "README 说排查流程缺日志或版本时会暂停追问，代码里实际检查的是哪些信息？",
+    "expected": "不一致：代码只在缺产品版本或复现步骤时中断追问，日志不是必填（没有日志可先给版本和复现步骤）；README 说的缺日志不会触发暂停，也没提复现步骤",
+    "expected_status": "conflict",
+    "evidence": [
+      {
+        "path": "README.md",
+        "start": 14,
+        "end": 14,
+        "quote": "缺日志或版本时 `interrupt` 暂停追问"
+      },
+      {
+        "path": "devrag/support/service.py",
+        "start": 42,
+        "end": 43,
+        "quote": "def missing_fields(state):"
+      },
+      {
+        "path": "devrag/support/service.py",
+        "start": 21,
+        "end": 23,
+        "quote": "没有日志可先提供版本与复现步骤"
+      }
+    ]
+  },
+  {
+    "id": "tb18",
+    "repo": "tracebook",
+    "category": "D",
+    "question": "能把它接到飞书或钉钉的群机器人上，在群里直接提问吗？",
+    "expected": "资料未提供相关实现，应说明证据不足",
+    "expected_status": "insufficient",
+    "evidence": [],
+    "absence_check": [
+      "飞书",
+      "钉钉",
+      "feishu",
+      "dingtalk"
+    ]
+  },
+  {
+    "id": "tb19",
+    "repo": "tracebook",
+    "category": "D",
+    "question": "它能自动给 GitHub 上的 Pull Request 写代码评审意见吗？",
+    "expected": "资料未提供相关实现，应说明证据不足",
+    "expected_status": "insufficient",
+    "evidence": [],
+    "absence_check": [
+      "pull request",
+      "pull_request",
+      "评审意见",
+      "code review"
+    ]
+  },
+  {
+    "id": "tb20",
+    "repo": "tracebook",
+    "category": "D",
+    "question": "支持语音提问吗？比如录一段语音转成文字再检索。",
+    "expected": "资料未提供相关实现，应说明证据不足",
+    "expected_status": "insufficient",
+    "evidence": [],
+    "absence_check": [
+      "语音",
+      "speech",
+      "whisper",
+      "audio"
+    ]
+  },
+  {
+    "id": "cl01",
+    "repo": "container-loading-planner",
+    "category": "A",
+    "question": "CONTAINERS 里 40HQ 的内部尺寸和最大载重是多少？",
+    "expected": "40 尺高柜：长 1205 cm、宽 235 cm、高 269 cm，最大载重 25000 kg。",
+    "evidence": [
+      {
+        "path": "_packer.py",
+        "start": 10,
+        "end": 15,
+        "quote": "\"40HQ\": {\"L\": 1205, \"W\": 235, \"H\": 269, \"max_kg\": 25000"
+      },
+      {
+        "path": "_frontend.py",
+        "start": 354,
+        "end": 354,
+        "quote": "\"40HQ\":{name:\"40尺高柜\",L:1205,W:235,H:269,maxKg:25000"
+      }
+    ]
+  },
+  {
+    "id": "cl02",
+    "repo": "container-loading-planner",
+    "category": "A",
+    "question": "_post_dashscope 为什么要绕开系统代理？请求超时设了多久？",
+    "expected": "注释说阿里国内 API 不能走代理，所以用空的 ProxyHandler 强制直连，绕开 VPN 和 HTTP_PROXY；超时 DASHSCOPE_TIMEOUT 为 180 秒，因为 Qwen 处理大图可能要 90 秒以上。",
+    "evidence": [
+      {
+        "path": "app.py",
+        "start": 33,
+        "end": 58,
+        "quote": "强制 DashScope 直连(绕开 VPN / HTTP_PROXY)"
+      }
+    ]
+  },
+  {
+    "id": "cl03",
+    "repo": "container-loading-planner",
+    "category": "A",
+    "question": "text_quality.py 里的 find_mojibake_in_text 靠什么判断一行文字是乱码？这些乱码标记是怎么来的？",
+    "expected": "把一组常用界面中文短语按 UTF-8 编码后再用 gbk、cp936、cp1252、latin1 解码，得到典型乱码串，再加上替换字符和“锟斤拷”等固定标记；逐行检查是否包含任一标记，命中就记录路径、行号和片段。",
+    "evidence": [
+      {
+        "path": "text_quality.py",
+        "start": 34,
+        "end": 63,
+        "quote": "for codec in (\"gbk\", \"cp936\", \"cp1252\", \"latin1\"):"
+      },
+      {
+        "path": "text_quality.py",
+        "start": 77,
+        "end": 91,
+        "quote": "for marker in MOJIBAKE_MARKERS:"
+      }
+    ]
+  },
+  {
+    "id": "cl04",
+    "repo": "container-loading-planner",
+    "category": "A",
+    "question": "--self-test 自检会检查哪些东西，怎样才算通过？",
+    "expected": "先确认渲染模块能导入（渲染链路随包），再在空闲端口起本地服务，40 秒内请求首页；返回内容含 <html 且超过 5000 字节算通过、退出码 0，否则退出码 3，结果写到临时目录的 ContainerPack-self-test.log。",
+    "evidence": [
+      {
+        "path": "app.py",
+        "start": 1362,
+        "end": 1389,
+        "quote": "ok = b\"<html\" in body.lower() and len(body) > 5000"
+      }
+    ]
+  },
+  {
+    "id": "cl05",
+    "repo": "container-loading-planner",
+    "category": "B",
+    "question": "限定直立的货物，排柜时允许怎么旋转？",
+    "expected": "只能在水平面内转 90 度：长宽互换、高度方向不变，只有两种摆法；不限直立的货物会枚举长宽高的全部排列，最多 6 种。",
+    "evidence": [
+      {
+        "path": "_packer.py",
+        "start": 47,
+        "end": 55,
+        "quote": "return [(l, w, h, False), (w, l, h, True)]"
+      },
+      {
+        "path": "README.md",
+        "start": 9,
+        "end": 9,
+        "quote": "限直立货物只允许水平旋转"
+      }
+    ]
+  },
+  {
+    "id": "cl06",
+    "repo": "container-loading-planner",
+    "category": "B",
+    "question": "柜长分段限重是怎么把每箱货的重量分到各段的？",
+    "expected": "把柜长平均分成 6 段，看每箱货在柜长方向的中心点落在哪一段，就把整箱重量累加到那一段。",
+    "evidence": [
+      {
+        "path": "_validator.py",
+        "start": 89,
+        "end": 106,
+        "quote": "center = p.x + p.length / 2"
+      },
+      {
+        "path": "app.py",
+        "start": 473,
+        "end": 491,
+        "quote": "center = p.x + p.length / 2"
+      }
+    ]
+  },
+  {
+    "id": "cl07",
+    "repo": "container-loading-planner",
+    "category": "B",
+    "question": "单箱累计上压是怎么算的？上面一箱同时压在几箱货上时怎么分摊？",
+    "expected": "从高到低处理每箱货，用它的自重加上它已承受的上压作为总压力，按与下层每箱的接触面积占自身底面积的比例分摊下去。",
+    "evidence": [
+      {
+        "path": "_validator.py",
+        "start": 109,
+        "end": 131,
+        "quote": "loads[lower_idx] += gross_load * overlap_area / footprint"
+      }
+    ]
+  },
+  {
+    "id": "cl08",
+    "repo": "container-loading-planner",
+    "category": "B",
+    "question": "导出三视图图片时，中文字体是怎么处理的？",
+    "expected": "依次查找微软雅黑、黑体、Noto Sans CJK、文泉驿、苹方等字体，用第一个找得到的作为默认字体并关闭负号的 Unicode 渲染；都找不到就保持默认字体。",
+    "evidence": [
+      {
+        "path": "_visualizer.py",
+        "start": 14,
+        "end": 25,
+        "quote": "for fname in [\"Microsoft YaHei\", \"SimHei\", \"Noto Sans CJK SC\","
+      }
+    ]
+  },
+  {
+    "id": "cl09",
+    "repo": "container-loading-planner",
+    "category": "B",
+    "question": "浏览器里的自动草稿多久保存一次，存在哪里？",
+    "expected": "改动后防抖 650 毫秒保存一次，带保存时间写入浏览器 localStorage 的 container-pack-autodraft-v1 键；保存失败会提示手动保存项目。",
+    "evidence": [
+      {
+        "path": "_frontend.py",
+        "start": 374,
+        "end": 378,
+        "quote": "const DRAFT_SAVE_DELAY=650;"
+      },
+      {
+        "path": "_frontend.py",
+        "start": 420,
+        "end": 437,
+        "quote": "localStorage.setItem(DRAFT_KEY,JSON.stringify("
+      }
+    ]
+  },
+  {
+    "id": "cl10",
+    "repo": "container-loading-planner",
+    "category": "B",
+    "question": "上层货物下面没有垫满、部分悬空时，校验是怎么判断的？",
+    "expected": "对每箱离地的货物，找出顶面正好与它底面齐平的下层货物，计算接触面积的并集；支撑面积小于自身底面积就报“底面支撑不足”错误。",
+    "evidence": [
+      {
+        "path": "_validator.py",
+        "start": 255,
+        "end": 265,
+        "quote": "上层货物底面支撑不足"
+      },
+      {
+        "path": "_validator.py",
+        "start": 72,
+        "end": 86,
+        "quote": "if abs(lower_top - item.z) > EPS:"
+      }
+    ]
+  },
+  {
+    "id": "cl11",
+    "repo": "container-loading-planner",
+    "category": "C",
+    "question": "README 说多厂家货物在紧凑排法利用率偏低时会自动改按厂家分区，代码里“偏低”具体指多少？",
+    "expected": "auto 模式先用紧凑排法试排，至少有 2 个厂家、体积利用率低于 75% 且没有装不下的货时，改用按厂家分组排法。",
+    "evidence": [
+      {
+        "path": "README.md",
+        "start": 9,
+        "end": 9,
+        "quote": "多厂家货物在紧凑排法利用率偏低时自动改为按厂家分区"
+      },
+      {
+        "path": "_packer.py",
+        "start": 102,
+        "end": 113,
+        "quote": "if len(suppliers) >= 2 and util < 0.75 and not unfitted:"
+      },
+      {
+        "path": "app.py",
+        "start": 1047,
+        "end": 1059,
+        "quote": "if len(suppliers) >= 2 and util < 0.75 and not pre_unfitted:"
+      }
+    ]
+  },
+  {
+    "id": "cl12",
+    "repo": "container-loading-planner",
+    "category": "C",
+    "question": "README 说 AI 识别的清单先做结构校验再进表格，代码里具体校验了什么？",
+    "expected": "_normalize_extracted_skus 把返回统一成列表，超过 MAX_SKUS（200）行直接 422；每行按 ExtractedSKUPayload 校验，尺寸 0 到 1500 cm、单重不超过 30000 kg、数量不超过 1000、堆叠方式只能是 full/flat/none 等，不合格返回 422 提示重试或手工校对。",
+    "evidence": [
+      {
+        "path": "README.md",
+        "start": 13,
+        "end": 13,
+        "quote": "结果先做结构校验再进表格"
+      },
+      {
+        "path": "docs/DEVELOPMENT.md",
+        "start": 6,
+        "end": 6,
+        "quote": "AI 提取结果进入表格前做结构校验"
+      },
+      {
+        "path": "app.py",
+        "start": 176,
+        "end": 187,
+        "quote": "ExtractedSKUPayload.model_validate(item).model_dump()"
+      },
+      {
+        "path": "app.py",
+        "start": 95,
+        "end": 108,
+        "quote": "qty: int = Field(0, ge=0, le=MAX_QTY_PER_SKU)"
+      },
+      {
+        "path": "app.py",
+        "start": 38,
+        "end": 43,
+        "quote": "MAX_DIM_CM = 1500"
+      }
+    ]
+  },
+  {
+    "id": "cl13",
+    "repo": "container-loading-planner",
+    "category": "C",
+    "question": "README 说 preflight.py 会编译源码、检查文本编码、跑单测和接口冒烟，代码里的执行顺序和可跳过的步骤是怎样的？",
+    "expected": "顺序是编译源码、文本编码检查、单元测试、接口冒烟，最后是可选的浏览器冒烟；--skip-tests 和 --skip-smoke 跳过单测和冒烟，--browser-smoke 才跑真实浏览器检查，--strict-render 要求 PNG 渲染依赖可用。",
+    "evidence": [
+      {
+        "path": "README.md",
+        "start": 87,
+        "end": 87,
+        "quote": "会编译源码、检查文本编码、跑单测和接口冒烟"
+      },
+      {
+        "path": "preflight.py",
+        "start": 139,
+        "end": 161,
+        "quote": "if not args.skip_tests:"
+      }
+    ]
+  },
+  {
+    "id": "cl14",
+    "repo": "container-loading-planner",
+    "category": "D",
+    "question": "能直接对接仓库管理系统，自动拉取订单生成装柜清单吗？",
+    "expected": "资料里没有对接仓库管理系统或自动拉取订单的实现，应回答证据不足。",
+    "expected_status": "insufficient",
+    "evidence": [],
+    "absence_check": [
+      "WMS",
+      "仓库管理系统",
+      "订单同步",
+      "拉取订单"
+    ]
+  },
+  {
+    "id": "cl15",
+    "repo": "container-loading-planner",
+    "category": "D",
+    "question": "支持铁路车皮或者散货船的装载规划吗？",
+    "expected": "资料里没有铁路车皮或散货船装载规划的实现，应回答证据不足。",
+    "expected_status": "insufficient",
+    "evidence": [],
+    "absence_check": [
+      "铁路",
+      "车皮",
+      "散货船",
+      "railway"
+    ]
+  },
+  {
+    "id": "ds01",
+    "repo": "doc-studio",
+    "category": "A",
+    "question": "DOC_QA_VL_MODEL 没设置时默认用哪个视觉模型？",
+    "expected": "默认 qwen3.6-plus；视觉质检和视觉复核都读这个变量，设置新值后重启服务即可换模型。",
+    "evidence": [
+      {
+        "path": "engine_qa.py",
+        "start": 15,
+        "end": 17,
+        "quote": "QA_VL_MODEL = os.environ.get(\"DOC_QA_VL_MODEL\", \"qwen3.6-plus\")"
+      },
+      {
+        "path": "engine_review.py",
+        "start": 19,
+        "end": 19,
+        "quote": "VL_MODEL = os.environ.get(\"DOC_QA_VL_MODEL\", \"qwen3.6-plus\")"
+      },
+      {
+        "path": "README.md",
+        "start": 46,
+        "end": 46,
+        "quote": "视觉模型默认 `qwen3.6-plus`，可用环境变量 `DOC_QA_VL_MODEL` 覆盖"
+      }
+    ]
+  },
+  {
+    "id": "ds02",
+    "repo": "doc-studio",
+    "category": "A",
+    "question": "TRANSLATE_CHAIN 里有多个翻译模型时，translate_models 怎么决定先用哪个？",
+    "expected": "TRANSLATE_CHAIN 按到期日从早到晚手工排好，代码不再排序：只保留今天还没过到期日的模型并保持原顺序，排在最前（最早到期）的作为当前主模型；全部过期就兜底用最后一个。",
+    "evidence": [
+      {
+        "path": "server.py",
+        "start": 30,
+        "end": 42,
+        "quote": "chain = [m for m, exp in TRANSLATE_CHAIN if today <= exp]"
+      }
+    ]
+  },
+  {
+    "id": "ds03",
+    "repo": "doc-studio",
+    "category": "A",
+    "question": "debrand.py 加 --auto-drop 时，会自动删掉哪几类页面？",
+    "expected": "删除页面分类器标为 drop 的页：命中 3 个以上社媒或渠道平台的联系页、去掉空白后不足 40 个字符的近空白页、命中企业宣传章节短语或标题含宣传词的企业宣传页；封面保留，资质页和无法判定的页只标人工复核。",
+    "evidence": [
+      {
+        "path": "debrand.py",
+        "start": 145,
+        "end": 163,
+        "quote": "t, s, why = \"empty\", \"drop\""
+      },
+      {
+        "path": "README.md",
+        "start": 57,
+        "end": 57,
+        "quote": "自动删除分类器判为 drop 的页（企业宣传/联系/空页）"
+      },
+      {
+        "path": "README.md",
+        "start": 11,
+        "end": 11,
+        "quote": "页面分类器把企业宣传页、联系页、空页标为建议删除"
+      }
+    ]
+  },
+  {
+    "id": "ds04",
+    "repo": "doc-studio",
+    "category": "A",
+    "question": "find_vl_model.py 是按什么规则从模型列表里挑出候选视觉模型的？",
+    "expected": "名字含 vl、vision、omni，或含 -plus、-flash、-max、-turbo 这类主对话档的算候选；含 realtime、audio、tts、asr、embedding、rerank、coder、math 的排除，带日期后缀的快照也排除，只测滚动别名。",
+    "evidence": [
+      {
+        "path": "find_vl_model.py",
+        "start": 48,
+        "end": 58,
+        "quote": "VISION_KEYS = (\"vl\", \"vision\", \"omni\")"
+      }
+    ]
+  },
+  {
+    "id": "ds05",
+    "repo": "doc-studio",
+    "category": "B",
+    "question": "删除联系信息时，哪些中文字眼会被认作联系方式？",
+    "expected": "一行里含地址、厂址、电话、传真、手机、邮箱、网址、微信任一词，或含邮箱地址、网址，或含 address、tel、phone 等英文联系词，就当作联系信息删除。",
+    "evidence": [
+      {
+        "path": "debrand.py",
+        "start": 21,
+        "end": 30,
+        "quote": "CONTACT_CJK = [\"地址\", \"厂址\", \"电话\", \"传真\", \"手机\", \"邮箱\", \"网址\", \"微信\"]"
+      }
+    ]
+  },
+  {
+    "id": "ds06",
+    "repo": "doc-studio",
+    "category": "B",
+    "question": "翻译时，纯数字和型号样式的文字会被翻译吗？",
+    "expected": "不会。翻译只抽含中文的单元格或文字行，纯数字、型号、英文不进翻译单元，原样保留；含中文的格整格送模型翻译时，提示词也要求数字、型号、规格代号原样保留。",
+    "evidence": [
+      {
+        "path": "engine_translate.py",
+        "start": 68,
+        "end": 69,
+        "quote": "只抓含源语言CJK的单元; 数字/型号/英文自动保留=不入units"
+      },
+      {
+        "path": "server.py",
+        "start": 255,
+        "end": 257,
+        "quote": "数字/型号/规格代号原样保留"
+      }
+    ]
+  },
+  {
+    "id": "ds07",
+    "repo": "doc-studio",
+    "category": "B",
+    "question": "怎么判断上传的文件是矢量文档还是图片型目录？分界线是多少？",
+    "expected": "纯算法判断：算每页最大单张图片占页面面积的比例，再取全文档平均；平均超过 20% 判为图片型目录（可能有烤进图里的品牌），否则判为矢量文档。",
+    "evidence": [
+      {
+        "path": "server.py",
+        "start": 124,
+        "end": 144,
+        "quote": "\"type\": \"image\" if avg > 0.20 else \"vector\""
+      }
+    ]
+  },
+  {
+    "id": "ds08",
+    "repo": "doc-studio",
+    "category": "B",
+    "question": "擦除照片上的厂标时，页面按多高的分辨率渲染？调高有什么代价？",
+    "expected": "默认按 200 dpi 渲染页面再做图像修复；dpi 越高越清晰，但处理越慢。",
+    "evidence": [
+      {
+        "path": "engine_inpaint.py",
+        "start": 14,
+        "end": 14,
+        "quote": "擦除时页面渲染 dpi(越高越清晰、越慢)"
+      }
+    ]
+  },
+  {
+    "id": "ds09",
+    "repo": "doc-studio",
+    "category": "B",
+    "question": "回填译文时，字号是怎么根据单元格大小自动调整的？",
+    "expected": "从起始字号开始试着排进单元格矩形，放不下就每次减 0.2 号，最小到 2.5 号；仍放不下就用 2.5 号。",
+    "evidence": [
+      {
+        "path": "engine_translate.py",
+        "start": 188,
+        "end": 194,
+        "quote": "fs -= 0.2"
+      }
+    ]
+  },
+  {
+    "id": "ds10",
+    "repo": "doc-studio",
+    "category": "B",
+    "question": "视觉模型返回的框坐标是怎么换算回页面坐标的？",
+    "expected": "缩略图按 110 dpi 渲染，模型返回的像素框按“像素 × 72 ÷ 110”换算成页面的 pt 坐标。",
+    "evidence": [
+      {
+        "path": "engine_review.py",
+        "start": 21,
+        "end": 21,
+        "quote": "VL 返回的 px 框按此换算回 pt(px*72/dpi)"
+      }
+    ]
+  },
+  {
+    "id": "ds11",
+    "repo": "doc-studio",
+    "category": "C",
+    "question": "README 说同一图片跨 3 页以上且中位面积小于 6% 会被判定为 logo，代码里的判定条件是这样吗？",
+    "expected": "一致：detect_logo_xrefs 默认 min_pages=3、max_area=0.06，统计同一图片对象出现的页数和每次占页面面积比例的中位数，跨至少 3 页且中位面积低于 6% 才判为 logo。",
+    "evidence": [
+      {
+        "path": "README.md",
+        "start": 11,
+        "end": 11,
+        "quote": "同一图片跨 3 页以上且中位面积小于 6% 判定为 logo 并删除"
+      },
+      {
+        "path": "debrand.py",
+        "start": 57,
+        "end": 77,
+        "quote": "if len(pages) >= min_pages and med < max_area:"
+      }
+    ]
+  },
+  {
+    "id": "ds12",
+    "repo": "doc-studio",
+    "category": "C",
+    "question": "README 说术语库整句命中时直接用锁定译法、不调用模型，句中出现的术语注入提示词，代码里是这样做的吗？",
+    "expected": "一致：_qwen_translate 先把整条精确命中术语库的文本直接用锁定译法、不送模型；其余每批 40 条送模型，批内文本里出现的术语拼成“术语对照表”加进提示词作为硬约束。",
+    "evidence": [
+      {
+        "path": "README.md",
+        "start": 10,
+        "end": 10,
+        "quote": "整句命中时直接使用锁定译法、不调用模型"
+      },
+      {
+        "path": "server.py",
+        "start": 236,
+        "end": 254,
+        "quote": "术语库锁定①: 精确命中整条"
+      }
+    ]
+  },
+  {
+    "id": "ds13",
+    "repo": "doc-studio",
+    "category": "C",
+    "question": "README 说导出前统计残留品牌词、残留不为 0 时提示不要外发，代码里是怎么判定的？",
+    "expected": "一致：build_qa 把品牌词残留列为 fail 级检查，残留不为 0 时总判定为 fail（别发）；中文残留、文字溢出和正文残留图只算 warn（可发但建议复核）。",
+    "evidence": [
+      {
+        "path": "README.md",
+        "start": 13,
+        "end": 13,
+        "quote": "统计残留品牌词，残留不为 0 时提示不要外发"
+      },
+      {
+        "path": "engine_qa.py",
+        "start": 20,
+        "end": 43,
+        "quote": "add(\"brand\", brand == 0, \"fail\", brand)"
+      }
+    ]
+  },
+  {
+    "id": "ds14",
+    "repo": "doc-studio",
+    "category": "D",
+    "question": "翻译成阿拉伯语这类从右往左书写的语言时，排版会自动调整吗？",
+    "expected": "资料里没有从右往左语言排版的实现或说明，应回答证据不足。",
+    "expected_status": "insufficient",
+    "evidence": [],
+    "absence_check": [
+      "阿拉伯",
+      "arabic",
+      "从右往左",
+      "right-to-left"
+    ]
+  },
+  {
+    "id": "ds15",
+    "repo": "doc-studio",
+    "category": "D",
+    "question": "工具能直接用邮件把处理好的文件发给客户吗？比如填上客户邮箱一键发送。",
+    "expected": "资料里没有发送邮件的实现，应回答证据不足。",
+    "expected_status": "insufficient",
+    "evidence": [],
+    "absence_check": [
+      "smtp",
+      "发送邮件",
+      "sendmail",
+      "邮件发送"
+    ]
+  }
 ]
