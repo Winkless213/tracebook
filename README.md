@@ -1,5 +1,7 @@
 # Tracebook
 
+[![CI](https://github.com/Winkless213/tracebook/actions/workflows/ci.yml/badge.svg)](https://github.com/Winkless213/tracebook/actions/workflows/ci.yml)
+
 把项目代码、文档和开发会话整理成带出处的知识库，供 AI 编码助手和人查阅；在此基础上提供技术客服 Agent，用项目知识回答问题和排查故障。单人项目：FastAPI + SQLite 后端，React 前端，LangGraph 编排客服流程。
 
 ![检索与证据面板（导入 Tracebook 自身代码后的检索结果）](docs/images/search.png)
