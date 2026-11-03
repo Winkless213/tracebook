@@ -66,11 +66,11 @@ tests/ evaluation/ examples/ searxng/ 与顶层 Dockerfile、compose.yaml、API-
 python -m pytest -q
 python -m ruff check devrag tests scripts
 npm --prefix frontend test
-python scripts/evaluate.py output/my-project.json --output output/retrieval.json
+python scripts/evaluate.py --bundles output/eval/bundles --output output/eval/retrieval.json
 python scripts/evaluate_boundaries.py --output output/edges.json
 ```
 
-`evaluation/questions.json` 是针对 Tracebook 自身代码的示例题，用来演示题集格式；评测自己的项目需要另写题集，`--answers` 和边界评测会调用已配置的模型。`pytest` 和 `ruff` 不在 `requirements.txt` 里，需要另行安装。
+`evaluation/` 里是固定在三个公开仓库提交上的 50 道检索题，题型、判分和对比方法见 `evaluation/README.md`；`--bundles` 目录放按 `corpora.json` 导出的三份快照（`<仓库名>.json`）。`--answers` 和边界评测会调用已配置的模型。`pytest` 和 `ruff` 不在 `requirements.txt` 里，需要另行安装。
 
 ## 已知局限
 
