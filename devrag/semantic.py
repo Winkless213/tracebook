@@ -34,4 +34,5 @@ class LocalModels:
         return next(iter(self.embedding_model().query_embed(text)))
 
     def rerank(self, query, texts):
-        return list(self.rerank_model().rerank(query, texts))
+        # 一次只送一对：int8 重排模型的分数会随同批片段变化，30 个长片段补齐成一批还会耗尽内存。
+        return list(self.rerank_model().rerank(query, texts, batch_size=1))

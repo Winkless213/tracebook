@@ -5,6 +5,7 @@ from test_knowledge import bundle
 
 from devrag.app import create_app
 from devrag.retrieval import Retriever, fuse
+from devrag.semantic import LocalModels
 from devrag.store import Store
 
 FILES = {'cache.py': 'def put(key):\n    """写入 Redis，30 秒后失效。"""\n    return key\n',
@@ -89,6 +90,20 @@ def test_vector_methods_need_models_and_unknown_methods_fail(tmp_path):
         Retriever(store).search(pid, '退款', method='vector')
     with pytest.raises(ValueError):
         Retriever(store).search(pid, '退款', method='dense')
+
+
+def test_reranker_scores_one_pair_at_a_time():
+    sizes = []
+
+    class CrossEncoder:
+        def rerank(self, query, documents, batch_size=64):
+            sizes.append(batch_size)
+            return iter([0.5] * len(documents))
+
+    models = LocalModels()
+    models.reranker = CrossEncoder()
+    assert models.rerank('问题', ['a', 'b']) == [0.5, 0.5]
+    assert sizes == [1]
 
 
 def test_app_rejects_an_unknown_retrieval_method(tmp_path, monkeypatch):
