@@ -11,7 +11,7 @@
 - POST /api/import 接收 UTF-8 JSON 快照（文件上传由前端读文本后 JSON 发送），形状 `{schema:1,project,branch,commit,files:[{path,content,sha256}],exported_at,excluded:[{path,reason}]}`；最多200文件、总文本2MB，请求3MB。返回 `{project,snapshot,unchanged,excluded_count}`。上传区注明资料会在提问时将相关片段发往已配置模型；导入不会调用模型。
   可选 `scope:{selected_roots:string[],tracked_file_count,out_of_scope_count}` 由新版导出器产生，说明已选范围及仓库中未纳入的文件数量；旧快照缺省为null，不能猜测覆盖率。
 - GET /api/samples → `[{id,title,description,question}]`。
-- POST /api/search `{project_id,question,snapshot_id?:string,top_k:6}` → `{snapshot,sources:[source],query,method:"bm25-symbol",warnings:[string]}`。
+- POST /api/search `{project_id,question,snapshot_id?:string,top_k:6}` → `{snapshot,sources:[source],query,method,warnings:[string]}`；method 是服务端 `RETRIEVAL_METHOD` 选的检索方式：`bm25-symbol`（默认）、`term-overlap`、`vector`、`hybrid` 或 `hybrid-rerank`。
 - POST /api/questions `{project_id,question,snapshot_id?:string}` 加 `Idempotency-Key:<uuid>` → question；立即返回保存状态，前端每1.5秒轮询直到终态。问题8–2000字符。
 - GET /api/questions?project_id=... → question summary 数组，最近100条。
 - GET /api/questions/{id} → 完整 question。
@@ -22,7 +22,7 @@
 source `{id:"S1",path,start_line,end_line,content,kind:"code"|"document"|"config"|"test",symbol,commit,sha256,score}`，每次检索的S编号只在当前问答有效。
 
 question summary `{id,project_id,question,status,created_at,updated_at,snapshot_id,commit,error,stale}`。
-完整 question 加 `{sources:[source],result:null|result,usage:{input_tokens,output_tokens,total_tokens,unreported_calls},attempts:[{model,status,latency_ms,input_tokens,output_tokens,error}],events:[{id,kind,message,created_at}],latency_ms,method,recovery_count}`。
+完整 question 加 `{sources:[source],result:null|result,usage:{input_tokens,output_tokens,total_tokens,unreported_calls},attempts:[{model,status,latency_ms,input_tokens,output_tokens,error}],events:[{id,kind,message,created_at}],latency_ms,method:null|string,recovery_count}`；method 是该问题检索时实际用的方式，新建的问题在检索前为 null。
 status queued/retrieving/generating/completed/failed/cancelled。
 result `{status:"answered"|"insufficient"|"conflict",summary,claims:[{text,evidence:[{source_id,quote}]}],gaps:[string]}`；不足不伪装成功解决，conflict 显示冲突提示。summary 是摘要，依据位于claims；quote必须是对应source的连续原文。
 
