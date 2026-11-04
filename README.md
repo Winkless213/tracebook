@@ -76,7 +76,7 @@ python scripts/evaluate_boundaries.py --output output/edges.json
 
 ### 检索评测结果
 
-2026-11-03 在本机 CPU（AMD Ryzen 7 7745HX）上跑完 A/B/C 共 43 题。D 类和冲突题要用 `--answers` 检查模型回答，这一轮没跑。
+2026-11-03 在本机 CPU（AMD Ryzen 7 7745HX）上跑完 A/B/C 共 43 题。D 类和冲突题要用 `--answers` 检查模型回答，结果见下一节。
 
 | 方法 | hit@6 | MRR | A 点名 | B 不点名 | C 文档对照 | 耗时中位数 |
 |---|---|---|---|---|---|---|
@@ -98,6 +98,21 @@ python scripts/evaluate_boundaries.py --output output/edges.json
 - 第一次完整运行在重排时内存不足中止，改成逐对重排后整套重跑，见 `evaluation/README.md` 的偏差记录。
 
 向量类方法要先装 `fastembed==0.9.1`（不在 `requirements.txt` 里），两个模型的缓存约 1.6GB，位置用 `--models-dir` 或 `FASTEMBED_CACHE_DIR` 指定；只跑前两种方法时加 `--methods term-overlap bm25-symbol`。
+
+### 回答评测结果
+
+2026-11-04 用 `--answers` 跑了 D 类 7 题和冲突题 tb17。模型直连 DeepSeek 官方的 `deepseek-flash`（V4.1-Flash-1017），生成、备用和核验都用它；请求外层给生成和核验都加了 `thinking: {"type": "enabled"}` 和 `reasoning_effort: "max"`，覆盖了核验请求在代码里的 `low`（见 `evaluation/README.md` 的偏差记录）。
+
+| 轮次 | D 类（应为 insufficient） | 冲突题 tb17（应为 conflict） | 首次生成被核验打回 | 输入 / 输出 token | 回答总耗时 |
+|---|---|---|---|---|---|
+| 第一轮（修复前） | 3/7 | 0/1 | 4/8 | 7.0 万 / 9.3 万 | 9 分钟 |
+| 修复后重跑 | 6/7 | 0/1 | 3/8 | 9.8 万 / 13.9 万 | 14 分钟 |
+
+- 第一轮失败的 4 道 D 类题（tb18、tb19、cl14、ds14）都是首次生成被语义核验打回后整题失败：回答把检索到的几段片段说成了整个项目的情况，或把开发记录里的接口当成现状，核验意见都没有质疑"证据不足"这个结论。按设计，打回后要带着核验意见再生成一版，但代码只在有另一个备用模型时才这样做，主备同名时这一步被跳过。修复后只有一个模型时也会修正一次，请求失败仍不重复调用同一个模型。
+- 重跑时修正这一步用了 3 次：cl14 修正后通过；tb17 修正后通过核验，状态仍是 insufficient；ds15 修正时把资料里关于联网范围的出入当成冲突，状态改成了 conflict，再次被打回，整题失败。
+- 3/7 到 6/7 不全是修复的作用：tb18、tb19、ds14 重跑时首次生成就通过了核验，ds15 第一轮首次就通过、重跑却被打回。思考模式下温度参数不生效，同一道题两次运行的结果可能不同；每题只跑了一次，7 道题分不开修复和随机波动各占多少。
+- tb17 两轮都答成 insufficient：检索只命中了 README 一侧的证据，代码一侧的 `devrag/support/service.py`（`missing_fields`）没进前 6 个片段（五种检索方法都没命中这题），模型判定不了冲突。
+- 重跑用的是同一批题，修复也是这批题暴露的，重跑结果不算独立验证。
 
 ## 已知局限
 
