@@ -143,6 +143,46 @@ def test_exact_quote_does_not_bypass_semantic_review(monkeypatch):
     assert any(message['role'] == 'assistant' and json.loads(message['content']) == candidate for message in calls[2]['messages'])
 
 
+@pytest.mark.parametrize('fallback', ['solo', ''])
+def test_single_model_still_revises_rejected_draft(monkeypatch, fallback):
+    monkeypatch.setenv('LLM_BASE_URL', 'https://model.example/v1')
+    monkeypatch.setenv('LLM_API_KEY', 'test-only')
+    monkeypatch.setenv('LLM_PRIMARY_MODEL', 'solo')
+    monkeypatch.setenv('LLM_FALLBACK_MODEL', fallback)
+    monkeypatch.setenv('LLM_VERIFY_MODEL', 'solo')
+    candidate = {'status': 'insufficient', 'summary': '整个项目没有旅游资料。', 'claims': [], 'gaps': ['缺少资料']}
+    outputs = [candidate, {'supported': False, 'issues': ['把检索范围扩大成整个项目。']},
+               {**candidate, 'summary': '本次检索未提供旅游资料。'}, {'supported': True, 'issues': []}]
+    calls = []
+
+    def post(self, url, **kwargs):
+        calls.append(kwargs['json'])
+        return httpx.Response(200, request=httpx.Request('POST', url), json={'choices': [{'message': {'content': json.dumps(outputs[len(calls) - 1])}}]})
+
+    monkeypatch.setattr(httpx.Client, 'post', post)
+    result = LLM().answer('提供旅游资料', [{'id': 'S1', 'content': '本次检索未提供旅游资料。'}], lambda *args: 1, lambda: False)
+    assert result['summary'] == '本次检索未提供旅游资料。'
+    assert [call['model'] for call in calls] == ['solo'] * 4
+    assert any(message['role'] == 'assistant' and json.loads(message['content']) == candidate for message in calls[2]['messages'])
+
+
+def test_single_model_does_not_repeat_failed_request(monkeypatch):
+    monkeypatch.setenv('LLM_BASE_URL', 'https://model.example/v1')
+    monkeypatch.setenv('LLM_API_KEY', 'test-only')
+    monkeypatch.setenv('LLM_PRIMARY_MODEL', 'solo')
+    monkeypatch.setenv('LLM_FALLBACK_MODEL', 'solo')
+    calls = []
+
+    def post(self, url, **kwargs):
+        calls.append(kwargs['json']['model'])
+        return httpx.Response(200, request=httpx.Request('POST', url), json={'choices': [{'message': {'content': 'bad json'}}]})
+
+    monkeypatch.setattr(httpx.Client, 'post', post)
+    with pytest.raises(RuntimeError, match='结构'):
+        LLM().answer('问题', [], lambda *args: 1, lambda: False)
+    assert calls == ['solo']
+
+
 def test_review_length_limit_cannot_accept_partial_verdict(monkeypatch):
     monkeypatch.setenv('LLM_BASE_URL', 'https://model.example/v1')
     monkeypatch.setenv('LLM_API_KEY', 'test-only')

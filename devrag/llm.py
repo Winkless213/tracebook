@@ -85,8 +85,12 @@ class LLM:
         url = self.base if self.base.endswith('/chat/completions') else self.base + '/chat/completions'
         messages = [{'role': 'system', 'content': SYSTEM + json.dumps(Answer.model_json_schema(), ensure_ascii=False)},
                     {'role': 'user', 'content': json.dumps({'question': question, 'sources': sources}, ensure_ascii=False)}]
-        error = '模型请求失败'
-        for model in dict.fromkeys(filter(None, [self.primary, self.fallback])):
+        error, rejected, tried = '模型请求失败', False, set()
+        for model in filter(None, [self.primary, self.fallback or self.primary]):
+            if model in tried and not rejected:
+                break
+            tried.add(model)
+            rejected = False
             if cancelled():
                 raise RuntimeError('任务已取消')
             identifier = record(model, None, None, 0, {}, None)
@@ -109,6 +113,7 @@ class LLM:
                     record(model, identifier, 'rejected', round((time.monotonic() - started) * 1000), usage, error)
                     messages.append({'role': 'assistant', 'content': result.model_dump_json()})
                     messages.append({'role': 'user', 'content': '以上是未通过核验的草稿，不是事实依据。根据原始sources修正下列问题，收窄或删除无依据的结论，保留其余必要且有依据的部分；不要新增无关结论或扩写资料盘点。返回完整修正版JSON：' + json.dumps(verdict.issues, ensure_ascii=False)})
+                    rejected = True
                     continue
                 record(model, identifier, 'completed', round((time.monotonic() - started) * 1000), usage, None)
                 return result.model_dump()
