@@ -1,6 +1,6 @@
 services:
   app:
-    image: tracebook:${APP_RELEASE:?set APP_RELEASE to a verified Git commit}
+    image: ${TRACEBOOK_IMAGE:-tracebook}:${APP_RELEASE:?set APP_RELEASE to a verified Git commit}
     build:
       context: .
       args:

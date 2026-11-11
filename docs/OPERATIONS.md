@@ -2,6 +2,34 @@
 
 范围：单人 Tracebook，单容器/单 worker，SQLite WAL。默认回环端口8083、候选18083，与同一宿主机上其他应用的目录、数据及端口完全隔离。脚本不会自动操作其他应用；`--protect-container`用于部署前后比对其ID、镜像、PID及启动时间。
 
+## 持续部署
+
+`main` 上 CI 通过后调用 `.github/workflows/deploy.yml`：
+
+1. `image` 任务构建镜像 `ghcr.io/winkless213/tracebook:<commit>`（`APP_RELEASE` 即该提交），推到 GHCR。
+2. `deploy` 任务使用 GitHub 环境 `production`（只允许 `main`），用部署密钥 SSH 到 VPS，执行 `deploy <commit>`，并通过标准输入传一个只读令牌，用于拉取镜像。
+3. 服务器上的 `deploy/tracebook-deploy`：拉镜像 → 运行中的库在线备份到 `/data/backups/before-*.sqlite`（保留最新 10 份）→ `docker compose up --wait` 切到新版本 → 等 `/health` 报出新提交；不成功就切回上一版并返回失败。
+4. Actions 再从公网核对 `https://tracebook.sxsdas.cloud/health` 的 release。
+
+手动回滚或重新部署：在 Actions 里对 `main` 运行 Deploy，填入提交 SHA（该镜像须已在 GHCR）。容器回滚不撤销表结构变化，当前只追加表结构；需要撤销数据时按下文从备份恢复。
+
+服务器一次性准备（VPS 2，2026-11-11）：
+
+- 用户 `tracebook-deploy`，加入 `docker` 组。`~/.ssh/authorized_keys` 只有一行：`command="/usr/local/bin/tracebook-deploy",restrict <CI 公钥>`，这把密钥只能触发部署。
+- `/usr/local/bin/tracebook-deploy` 由仓库里的 `deploy/tracebook-deploy` 安装。
+- `/opt/tracebook/`：`compose.yaml` 来自仓库；`.env`（0600）既给 compose 做变量替换，也注入容器。`.env` 包含：
+  - `TRACEBOOK_IMAGE=ghcr.io/winkless213/tracebook`。
+  - `FORWARDED_ALLOW_IPS=*`：端口只绑 127.0.0.1，只有本机的 Caddy 能访问；uvicorn 据此识别 HTTPS，给会话 cookie 加 Secure。
+  - 应用变量。
+- 部署记录：`/opt/tracebook/releases.log` 和 `current-release`。
+- Caddy：`tracebook.sxsdas.cloud` 反代到 `127.0.0.1:8083`。
+- GitHub 环境 `production` 配置：
+  - secrets：`DEPLOY_SSH_KEY`（私钥只存在这里）、`DEPLOY_KNOWN_HOSTS`（服务器主机公钥，避免首次连接被冒充）。
+  - 变量：`DEPLOY_HOST`。
+- 改了 `compose.yaml` 或部署脚本要手动重新安装到服务器，CI 不会覆盖它们。
+
+下文的打包部署（`scripts/package.py` / `scripts/deploy.py`，`/opt/devrag`）是此前的手动流程，保留备用。
+
 ## 发布状态机
 
 干净提交及tracked文件哈希 → 受控解包到 `/opt/devrag/releases/<commit>` → 独立配置 → 清单校验与tar内容流构建 → 候选容器认证/静态文件/导入检索 → 在线备份 → 切换Tracebook → 镜像与进程身份/健康/API → 真实桌面与手机浏览器。

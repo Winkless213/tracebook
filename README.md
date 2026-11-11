@@ -41,7 +41,7 @@ Python 3.13+、Node 24+。用 Docker 部署时宿主机不需要这两个运行�
 
 ## Docker 部署
 
-`compose.yaml` 只启动服务 `app`：镜像 `tracebook:$APP_RELEASE`，容器端口 `8000` 映射到 `127.0.0.1:8083`，数据卷 `tracebook_data` 挂到 `/data`；`APP_RELEASE` 未设置时 compose 直接报错，端口可用 `TRACEBOOK_PORT` 覆盖。`.env` 由 `env_file` 注入容器（路径可用 `TRACEBOOK_ENV_FILE` 覆盖），发布、备份和恢复见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
+`compose.yaml` 只启动服务 `app`：镜像 `tracebook:$APP_RELEASE`（`TRACEBOOK_IMAGE` 可换成镜像仓库地址），容器端口 `8000` 映射到 `127.0.0.1:8083`，数据卷 `tracebook_data` 挂到 `/data`；`APP_RELEASE` 未设置时 compose 直接报错，端口可用 `TRACEBOOK_PORT` 覆盖。`.env` 由 `env_file` 注入容器（路径可用 `TRACEBOOK_ENV_FILE` 覆盖），发布、备份和恢复见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
 ```powershell
 Copy-Item .env.example .env   # 填入真实密钥和模型配置
@@ -49,6 +49,8 @@ $env:APP_RELEASE = '<已验证的 Git 提交>'
 docker compose up -d --build
 curl.exe http://127.0.0.1:8083/health
 ```
+
+持续部署：推到 `main` 且 CI 通过后，GitHub Actions 构建镜像 `ghcr.io/winkless213/tracebook:<commit>`，经 SSH 在 VPS 上切换；`/health` 报不出新版本就自动切回上一版，这次运行标红。手动回滚：在 Actions 里运行 Deploy，填入要回到的提交 SHA。流程与服务器准备见 [docs/OPERATIONS.md](docs/OPERATIONS.md#持续部署)。
 
 ## 目录结构
 
