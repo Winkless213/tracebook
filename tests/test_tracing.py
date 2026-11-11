@@ -131,6 +131,13 @@ def test_review_attempt_keeps_the_model_name_and_a_rejection_is_a_warning(langfu
     assert (review.fields['level'], review.fields['status_message']) == ('WARNING', '无依据')
 
 
+def test_an_attempt_that_never_finished_is_ended_as_an_error(langfuse):
+    with tracing.run('question') as run:
+        run.record(lambda *args: 7)('test-primary', None, None, 0, {}, None)
+    generation = langfuse.roots[0].children[0]
+    assert (generation.ended, generation.fields.get('level')) == (True, 'ERROR')
+
+
 def test_tracing_failures_never_break_the_answer(tmp_path, langfuse, monkeypatch, caplog):
     def broken(self, **fields):
         raise RuntimeError('langfuse is down')
@@ -167,4 +174,21 @@ def test_ticket_analysis_is_traced_and_confirmation_scores_the_session(tmp_path,
     analysis = next(root for root in langfuse.roots if root.name == 'support-analysis')
     assert analysis.children[0].fields['usage_details'] == {'input': 10, 'output': 4}
     assert analysis.scores[0] == {'name': 'outcome', 'value': 'awaiting_confirmation', 'data_type': 'CATEGORICAL'}
-    assert langfuse.scores == [{'session_id': thread, 'name': 'resolved', 'value': 1, 'data_type': 'BOOLEAN'}]
+    assert langfuse.scores == [{'session_id': thread, 'name': 'resolved', 'value': 1, 'data_type': 'BOOLEAN',
+                                'score_id': f'{thread}-resolved'}]
+
+
+def test_a_broken_langfuse_client_never_breaks_the_ticket_confirmation(tmp_path, langfuse, monkeypatch, caplog):
+    def broken():
+        raise ValueError('LANGFUSE_SAMPLE_RATE must be a number')
+
+    monkeypatch.setattr(langfuse, 'get_client', broken)
+    service = SupportService(tmp_path, FakeSupportModel())
+    thread = service.start(symptom=SYMPTOM)['thread_id']
+    ready(service, thread)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger='devrag.tracing'):
+        confirmed = service.confirm(thread, resolved=True, resolution_note='调整连接池上限后恢复消费')
+    service.close()
+    assert confirmed['status'] == 'resolved'
+    assert 'Langfuse tracing call failed' in caplog.text

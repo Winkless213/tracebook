@@ -95,7 +95,7 @@ class SupportService:
             lock.release()
 
     def _invoke(self, thread_id, payload):
-        # 本地会话不进入其他观测平台；只有模型客户端负责明确的外部请求。
+        # 关掉 LangSmith 自动追踪，会话状态不整段进入观测平台；可选的 Langfuse（tracing.py）只记录脱敏后的材料和结果。
         with tracing_context(enabled=False):
             self.graph.invoke(payload, self._config(thread_id))
         view = self.view(thread_id)

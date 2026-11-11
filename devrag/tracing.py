@@ -83,6 +83,13 @@ class Run:
             passed = not error and all(item == 'completed' for item in self.statuses)
             _guard(self.root.score_trace, name='first_pass', value=1 if passed else 0, data_type='BOOLEAN')
 
+    def close(self):
+        """取消或异常中断的尝试不会走到结束记录；未结束的 generation 不会上报，这里补上结束。"""
+        for generation in filter(None, self.open.values()):
+            _guard(generation.update, level='ERROR', status_message='尝试未正常结束（任务取消或处理中断）')
+            _guard(generation.end)
+        self.open.clear()
+
 
 @contextmanager
 def run(name, *, as_type='chain', input=None, tags=None, session_id=None):
@@ -97,11 +104,17 @@ def run(name, *, as_type='chain', input=None, tags=None, session_id=None):
             logger.warning('Langfuse tracing call failed; the request itself is unaffected', exc_info=True)
             stack.close()
             stack, root = ExitStack(), None
+    traced = Run(root)
     with stack:
-        yield Run(root)
+        try:
+            yield traced
+        finally:
+            traced.close()
 
 
 def score_session(session_id, name, value):
+    """固定 score_id：同一会话再次确认时覆盖上一次的分数。"""
     langfuse = client()
     if langfuse is not None:
-        _guard(langfuse.get_client().create_score, session_id=session_id, name=name, value=1 if value else 0, data_type='BOOLEAN')
+        _guard(lambda: langfuse.get_client().create_score(session_id=session_id, name=name, value=1 if value else 0,
+                                                           data_type='BOOLEAN', score_id=f'{session_id}-{name}'))
