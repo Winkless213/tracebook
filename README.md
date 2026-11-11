@@ -37,7 +37,7 @@ Python 3.13+、Node 24+。用 Docker 部署时宿主机不需要这两个运行�
 
 首次运行在当前目录创建 `data/`（`DATA_DIR` 可改）：`knowledge.sqlite` 主库、`worker.lock`、`developer-knowledge/` 和客服库 `support/`。示例配置见 `.env.example`；客服模块另读 `SUPPORT_*` 变量，密钥只从进程环境读取，不自动加载 `.env`。联网搜索可选自建 SearXNG（`searxng/compose.yaml`），设置 `SUPPORT_SEARXNG_URL`。
 
-可选的 Langfuse 追踪：另装 `langfuse` 包（不在 `requirements.txt` 里），设置 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY` 后启用，自建实例还要设 `LANGFUSE_BASE_URL`（不设时 SDK 默认发往 Langfuse Cloud）。问答、客服对话和工单分析各记一条 trace：检索、每次模型尝试（token 用量）、联网搜索工具，以及 `outcome`、`first_pass` 分数；客服按会话归组，工单确认后记会话分 `resolved`。没装包或没配密钥时不追踪，追踪出错只记日志，不影响请求。
+可选的 Langfuse 追踪：设置 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY` 后启用，自建实例还要设 `LANGFUSE_BASE_URL`（不设时 SDK 默认发往 Langfuse Cloud）。问答、客服对话和工单分析各记一条 trace：检索、每次模型尝试（token 用量）、联网搜索工具，以及 `outcome`、`first_pass` 分数；客服按会话归组，工单确认后记会话分 `resolved`。没装包或没配密钥时不追踪，追踪出错只记日志，不影响请求。
 
 ## Docker 部署
 
