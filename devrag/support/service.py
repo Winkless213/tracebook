@@ -10,6 +10,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from langsmith import tracing_context
 
+from .. import tracing
 from ..store import now
 from .chat import SupportChat
 from .model import SupportModel
@@ -188,20 +189,24 @@ class SupportService:
             self.store.end_attempt(attempt, status, latency, usage, mask_text(error)[0] if error else None)
 
         payload = {key: state[key] for key in ('symptom', 'product_version', 'reproduction', 'evidence')}
-        try:
-            raw = self.model.analyze(payload, record)
-            report = build_report(state, raw)
-            return {'report': report, 'status': 'awaiting_confirmation', 'error': None}
-        except ValueError:
-            error = '客服模型结构或引用校验未通过，未采纳该结果'
-        except Exception:
-            error = '客服模型分析未完成，请检查模型配置与调用记录后重试；脱敏材料已保存'
+        with tracing.run('support-analysis', input=payload, tags=['support', 'ticket'], session_id=state['thread_id']) as run:
+            try:
+                raw = self.model.analyze(payload, run.record(record))
+                report = build_report(state, raw)
+                run.finish(status='awaiting_confirmation', output=report)
+                return {'report': report, 'status': 'awaiting_confirmation', 'error': None}
+            except ValueError:
+                error = '客服模型结构或引用校验未通过，未采纳该结果'
+            except Exception:
+                error = '客服模型分析未完成，请检查模型配置与调用记录后重试；脱敏材料已保存'
+            run.finish(status='failed', error=error)
         return {'report': None, 'status': 'failed', 'error': error}
 
     def _feedback(self, state):
         supplied = interrupt({'kind': 'confirmation', 'message': '请验证建议，再明确确认是否解决；仍有问题可继续补充资料。'})
         if supplied['action'] == 'supplement':
             return merge_supplement(state, supplied)
+        tracing.score_session(state['thread_id'], 'resolved', supplied['resolved'])
         report = {**state['report'], 'confirmation': {'resolved': supplied['resolved'],
                   'resolution_note': supplied['resolution_note'], 'confirmed_at': now()}}
         return {'report': report, 'status': 'resolved' if supplied['resolved'] else 'unresolved'}

@@ -3,6 +3,7 @@ from uuid import UUID
 
 from filelock import FileLock, Timeout
 
+from .. import tracing
 from ..store import now
 from .model import WEB_SEARCH_TOOL
 from .redact import mask_data, mask_text
@@ -105,6 +106,11 @@ class SupportChat:
         return {'status': 'not_requested', 'query': '', 'notice': ''}
 
     def _answer(self, conversation):
+        with tracing.run('support-chat', as_type='agent', input={'message': conversation['turns'][-1]['message']},
+                         tags=['support', 'chat'], session_id=conversation['id']) as run:
+            return self._reply(conversation, run)
+
+    def _reply(self, conversation, run):
         turn = conversation['turns'][-1]
         turn.update(status='processing', error=None, response=None)
         self.store.save_conversation(conversation)
@@ -128,7 +134,9 @@ class SupportChat:
                 return cache[query]
             web_queries.append(query)
             try:
-                result = self.search.search(query)
+                with run.span('web_search', as_type='tool', input=query) as step:
+                    result = self.search.search(query)
+                    step.update(output={'status': result['status'], 'sources': len(result['sources'])})
             except Exception:
                 failed = True
                 cache[query] = {'status': 'unavailable', 'sources': []}
@@ -148,7 +156,7 @@ class SupportChat:
             payload = {'message': turn['message'], 'project_id': conversation['project_id'], 'history': history,
                        'evidence': knowledge, 'search_hint': turn.get('search_query', ''), 'warnings': warnings}
             result = ChatReply.model_validate(self.model.reply(
-                payload, record, WEB_SEARCH_TOOL if allow_web else None, tool_executor if allow_web else None))
+                payload, run.record(record), WEB_SEARCH_TOOL if allow_web else None, tool_executor if allow_web else None))
             evidence = knowledge + web_sources
             sources = {item['id']: item for item in evidence}
             if any(identifier not in sources for identifier in result.source_ids):
@@ -160,5 +168,6 @@ class SupportChat:
             turn['status'] = 'completed'
         except Exception:
             turn.update(status='failed', error='这次回复未完成，问题已保存，可以重试。')
+        run.finish(status=turn['status'], output=turn['response'], error=turn['error'])
         self.store.save_conversation(conversation)
         return self.view(conversation['id'])
