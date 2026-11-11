@@ -53,6 +53,63 @@ def test_runtime_does_not_send_key_to_a_different_gateway(monkeypatch):
         SupportModel()
 
 
+def _analysis_message():
+    analysis = {'status': 'insufficient', 'cause_hypotheses': [], 'suggestions': [], 'insufficient_reason': '需要连接池配置'}
+    return {'type': 'message', 'status': 'completed', 'role': 'assistant',
+            'content': [{'type': 'output_text', 'text': json.dumps(analysis)}]}
+
+
+def test_deepseek_key_uses_the_official_responses_endpoint_and_model(monkeypatch):
+    monkeypatch.delenv('SUPPORT_API_KEY', raising=False)
+    monkeypatch.setenv('SUPPORT_DEEPSEEK_API_KEY', 'synthetic-deepseek-key')
+    requests = []
+
+    def deepseek(request):
+        assert str(request.url) == 'https://api.deepseek.com/responses'
+        assert request.headers['authorization'] == 'Bearer synthetic-deepseek-key'
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={'status': 'completed', 'output': [_analysis_message()]})
+
+    assert SupportModel(transport=httpx.MockTransport(deepseek)).analyze({'evidence': []}, lambda *args: 1)['status'] == 'insufficient'
+    assert [body['model'] for body in requests] == ['deepseek-flash']
+    assert requests[0]['reasoning'] == {'effort': 'max'} and requests[0]['text']['format']['strict'] is True
+
+
+def test_deepseek_chat_starts_with_v4_pro_while_analysis_starts_with_flash(monkeypatch):
+    # 2026-11-11 实测：flash 答疑常无视 json_schema 写成正文（1/3 有效），v4-pro 3/3；分析时 flash 稳定。
+    monkeypatch.delenv('SUPPORT_API_KEY', raising=False)
+    monkeypatch.setenv('SUPPORT_DEEPSEEK_API_KEY', 'synthetic-deepseek-key')
+    models = []
+
+    def deepseek(request):
+        models.append(json.loads(request.content)['model'])
+        return httpx.Response(400, json={'error': 'synthetic rejection'})
+
+    model = SupportModel(transport=httpx.MockTransport(deepseek))
+    with pytest.raises(RuntimeError):
+        model.reply({'message': 'hi', 'evidence': []}, lambda *args: 1)
+    assert models == ['deepseek-v4-pro', 'deepseek-flash']
+    models.clear()
+    with pytest.raises(RuntimeError):
+        model.analyze({'evidence': []}, lambda *args: 1)
+    assert models == ['deepseek-flash', 'deepseek-v4-pro']
+
+
+def test_deepseek_key_cannot_be_combined_with_gateway_settings(monkeypatch):
+    monkeypatch.setenv('SUPPORT_DEEPSEEK_API_KEY', 'synthetic-deepseek-key')
+    monkeypatch.setenv('SUPPORT_API_KEY', 'synthetic-test-key')
+    with pytest.raises(ValueError, match='SUPPORT_DEEPSEEK_API_KEY'):
+        SupportModel()
+
+
+def test_deepseek_official_only_takes_its_verified_model(monkeypatch):
+    monkeypatch.delenv('SUPPORT_API_KEY', raising=False)
+    monkeypatch.setenv('SUPPORT_DEEPSEEK_API_KEY', 'synthetic-deepseek-key')
+    monkeypatch.setenv('SUPPORT_CHAT_PRIMARY_MODEL', 'gemini-3.8-flash-high')
+    with pytest.raises(ValueError, match='模型'):
+        SupportModel()
+
+
 def test_runtime_uses_separate_model_profiles_and_records_usage(monkeypatch):
     monkeypatch.setenv('SUPPORT_API_KEY', 'synthetic-test-key')
     monkeypatch.setenv('SUPPORT_PRIMARY_MODEL', 'deepseek-v4.1-flash')
@@ -239,6 +296,51 @@ def test_chat_tool_loop_searches_then_synthesizes_with_strict_schema_kept(monkey
     outputs = [item for item in requests[1]['input'] if item.get('type') == 'function_call_output']
     assert outputs and outputs[0]['call_id'] == 'call_1'
     assert json.loads(outputs[0]['output'])['sources'][0]['id'] == 'W1'
+    assert all(item.get('type') != 'reasoning' for item in requests[1]['input'])
+
+
+def _deepseek_chat(monkeypatch, first_output):
+    """DeepSeek 答疑：第一轮返回 first_output，之后返回合规回复；返回 (结果, 请求体列表, 执行过的检索)。"""
+    monkeypatch.delenv('SUPPORT_API_KEY', raising=False)
+    monkeypatch.setenv('SUPPORT_DEEPSEEK_API_KEY', 'synthetic-deepseek-key')
+    requests, executed = [], []
+
+    def deepseek(request):
+        requests.append(json.loads(request.content))
+        output = first_output if len(requests) == 1 else [_chat_message(source_ids=['W1'] if executed else [])]
+        return httpx.Response(200, json={'status': 'completed', 'output': output})
+
+    def executor(args):
+        executed.append(args)
+        return {'status': 'found', 'sources': [
+            {'id': 'W1', 'title': 'Python', 'url': 'https://python.org', 'content': '3.15.0', 'scope': 'snippet'}]}
+
+    result = SupportModel(transport=httpx.MockTransport(deepseek)).reply(
+        {'message': 'Python 最新版本', 'evidence': []}, lambda *args: 1, tool=WEB_SEARCH_TOOL, tool_executor=executor)
+    return result, requests, executed
+
+
+def test_deepseek_search_results_go_into_a_tool_free_answer_request(monkeypatch):
+    # 带着工具时 DeepSeek 常无视 json_schema；最终回答改由不带工具的请求给出，检索结果作为资料（2026-11-11 实测）。
+    calls = [{'type': 'function_call', 'call_id': f'call_{n}', 'name': 'web_search', 'arguments': json.dumps({'query': query})}
+             for n, query in ((1, 'Python latest'), (2, 'Python release notes'))]
+    result, requests, executed = _deepseek_chat(monkeypatch, [{'type': 'reasoning', 'summary': []}, *calls])
+    assert result['source_ids'] == ['W1']
+    assert executed == [{'query': 'Python latest'}, {'query': 'Python release notes'}]
+    assert [body['model'] for body in requests] == ['deepseek-v4-pro', 'deepseek-v4-pro']
+    assert requests[0]['tools'] == [WEB_SEARCH_TOOL] and requests[0]['tool_choice'] == 'auto'
+    answer = requests[1]
+    assert 'tools' not in answer and 'tool_choice' not in answer and answer['text']['format']['strict'] is True
+    data = json.loads(answer['input'])
+    assert data['message'] == 'Python 最新版本'
+    assert [(item['query'], item['sources'][0]['id']) for item in data['web_search']] == [('Python latest', 'W1'), ('Python release notes', 'W1')]
+
+
+def test_deepseek_answers_without_tools_even_when_it_does_not_search(monkeypatch):
+    result, requests, executed = _deepseek_chat(monkeypatch, [_chat_message(reply='带着工具写出的回答不采用')])
+    assert result['reply'] == '最新稳定版是 3.15.0' and executed == []
+    assert len(requests) == 2 and 'tools' not in requests[1]
+    assert json.loads(requests[1]['input']) == {'message': 'Python 最新版本', 'evidence': []}
 
 
 def test_chat_without_tool_call_answers_directly_and_skips_search(monkeypatch):

@@ -23,6 +23,12 @@ status=analyzed 时，只保留有直接证据支持的具体原因假设；一�
 
 ALLOWED_MODELS = ('deepseek-v4.1-flash', 'gemini-3.8-flash-high')
 GATEWAY = 'https://api.ciyuan.fast/v1'
+# DeepSeek 官方 Responses 接口（2026-11-11 实测）：分析时 flash 稳定守 json_schema；答疑时 flash 常写成正文
+# （1/3 有效），v4-pro 3/3，所以答疑 v4-pro 优先。各自以另一个模型兜底，与网关的分工方式一致。
+# 密钥单独用 SUPPORT_DEEPSEEK_API_KEY：旧版本不认它，回滚后客服只显示未配置，
+# 不会因地址或模型不在白名单而启动失败，也不会把这把 key 发给网关。
+DEEPSEEK = 'https://api.deepseek.com'
+DEEPSEEK_MODELS = ('deepseek-flash', 'deepseek-v4-pro')
 
 # Responses 端点的函数工具是扁平形状（name/parameters 直接在顶层）。
 WEB_SEARCH_TOOL = {
@@ -75,31 +81,44 @@ class SupportModel:
     """客服运行模型客户端。密钥只从环境变量读取；未配置时直接失败，不退回其它模型。"""
 
     def __init__(self, transport=None):
-        self.base = os.getenv('SUPPORT_BASE_URL', GATEWAY).rstrip('/')
-        self.key = os.getenv('SUPPORT_API_KEY', '')
-        self.primary = os.getenv('SUPPORT_PRIMARY_MODEL', ALLOWED_MODELS[0])
-        self.fallback = os.getenv('SUPPORT_FALLBACK_MODEL', ALLOWED_MODELS[1])
+        deepseek_key = os.getenv('SUPPORT_DEEPSEEK_API_KEY', '')
+        if deepseek_key and (os.getenv('SUPPORT_API_KEY') or os.getenv('SUPPORT_BASE_URL')):
+            raise ValueError('SUPPORT_DEEPSEEK_API_KEY 不能与 SUPPORT_API_KEY / SUPPORT_BASE_URL 同时设置')
+        if deepseek_key:
+            self.base, self.key = DEEPSEEK, deepseek_key
+            allowed, analysis_models, chat_models = DEEPSEEK_MODELS, DEEPSEEK_MODELS, DEEPSEEK_MODELS[::-1]
+        else:
+            self.base = os.getenv('SUPPORT_BASE_URL', GATEWAY).rstrip('/')
+            self.key = os.getenv('SUPPORT_API_KEY', '')
+            if self.base != GATEWAY:
+                raise ValueError('客服只允许已指定的 ciyuan 网关')
+            # 2026-10-15 验收中网关上 DS 连续 502/503 且每次空等 30s 以上，答疑改为 Gemini 优先；排查仍 DS 优先。
+            allowed, analysis_models, chat_models = ALLOWED_MODELS, ALLOWED_MODELS, ALLOWED_MODELS[::-1]
+        self.primary = os.getenv('SUPPORT_PRIMARY_MODEL', analysis_models[0])
+        self.fallback = os.getenv('SUPPORT_FALLBACK_MODEL', analysis_models[1])
         self.timeout = float(os.getenv('SUPPORT_TIMEOUT', '120'))
         self.max_attempts = max(1, int(os.getenv('SUPPORT_MAX_ATTEMPTS', '3')))
         # 日常答疑不需要诊断级推理；降档+更短超时+更少重试，把单轮等待压到群机器人量级。
         self.chat_effort = os.getenv('SUPPORT_CHAT_REASONING_EFFORT', 'high')
         self.chat_timeout = float(os.getenv('SUPPORT_CHAT_TIMEOUT', '60'))
         self.chat_max_attempts = max(1, int(os.getenv('SUPPORT_CHAT_MAX_ATTEMPTS', '2')))
-        # 2026-10-15 验收中网关上 DS 连续 502/503 且每次空等 30s 以上，答疑改为 Gemini 优先；排查仍 DS 优先。
-        self.chat_primary = os.getenv('SUPPORT_CHAT_PRIMARY_MODEL', ALLOWED_MODELS[1])
-        self.chat_fallback = os.getenv('SUPPORT_CHAT_FALLBACK_MODEL', ALLOWED_MODELS[0])
+        self.chat_primary = os.getenv('SUPPORT_CHAT_PRIMARY_MODEL', chat_models[0])
+        self.chat_fallback = os.getenv('SUPPORT_CHAT_FALLBACK_MODEL', chat_models[1])
         self.transport = transport
-        if self.base != GATEWAY:
-            raise ValueError('客服只允许已指定的 ciyuan 网关')
-        if {self.primary, self.chat_primary} - set(ALLOWED_MODELS) or {self.fallback, self.chat_fallback} - {'', *ALLOWED_MODELS}:
-            raise ValueError('客服只支持当前已验证的两种模型配置')
+        if {self.primary, self.chat_primary} - set(allowed) or {self.fallback, self.chat_fallback} - {'', *allowed}:
+            raise ValueError('客服只支持当前已验证的模型配置')
         # 分开声明推理档位，避免把不同模型的参数当成同一种协议。
         # DS 仅凭提示词约 1/5 次输出纯正文，严格 json_schema 实测稳定；Gemini 收到格式参数会把 schema 字段混进输出。
         ds_effort = os.getenv('SUPPORT_DEEPSEEK_REASONING_EFFORT', 'max')
         gemini_effort = os.getenv('SUPPORT_GEMINI_REASONING_EFFORT', 'max')
+
+        def deepseek(schema, effort):
+            return {'reasoning': {'effort': effort or ds_effort}, 'text': {'format': {
+                'type': 'json_schema', 'name': schema.__name__, 'schema': _strict_schema(schema.model_json_schema()), 'strict': True}}}
+
         self.profiles = {
-            ALLOWED_MODELS[0]: lambda schema, effort: {'reasoning': {'effort': effort or ds_effort}, 'text': {'format': {
-                'type': 'json_schema', 'name': schema.__name__, 'schema': _strict_schema(schema.model_json_schema()), 'strict': True}}},
+            ALLOWED_MODELS[0]: deepseek,
+            **dict.fromkeys(DEEPSEEK_MODELS, deepseek),
             ALLOWED_MODELS[1]: lambda schema, effort: {'reasoning': {'effort': effort or gemini_effort}},
         }
 
@@ -125,6 +144,21 @@ class SupportModel:
         response.raise_for_status()
         return response.json()
 
+    def _deepseek_answer(self, model, instructions, payload, data, schema, tool_executor, effort, timeout):
+        """DeepSeek 只要请求里带着工具就常无视 json_schema 写成正文（2026-11-11 实测 v4-pro：直接作答 1/4、回放工具调用 0/3 有效）。
+        带工具的那一轮只用来决定搜什么；最终回答总由不带工具的请求给出，检索结果作为资料放进输入（4/4 有效）。"""
+        found = []
+        for call in data.get('output', []):
+            if call.get('type') != 'function_call':
+                continue
+            try:
+                args = json.loads(call.get('arguments') or '{}')
+            except (ValueError, TypeError):
+                args = {}
+            found.append({'query': args.get('query', ''), **tool_executor(args)})
+        answer_input = {**payload, 'web_search': found} if found else payload
+        return self._post(model, instructions, json.dumps(answer_input, ensure_ascii=False), schema, None, None, effort, timeout)
+
     @staticmethod
     def _usage(data):
         raw = data.get('usage') or {}
@@ -144,7 +178,10 @@ class SupportModel:
                     data = self._post(model, instructions, model_input, schema, tool, 'auto' if tool else None, effort, timeout)
                     usage = self._usage(data)
                     # 单轮工具回路：模型自主发起 web_search，应用侧执行后回填，再让模型综合（tool_choice=none）。
-                    if tool and tool_executor:
+                    if tool and tool_executor and self.base == DEEPSEEK:
+                        data = self._deepseek_answer(model, instructions, payload, data, schema, tool_executor, effort, timeout)
+                        usage = self._usage(data) or usage
+                    elif tool and tool_executor:
                         calls = [item for item in data.get('output', []) if item.get('type') == 'function_call']
                         if calls:
                             replay = [{'role': 'user', 'content': model_input}]

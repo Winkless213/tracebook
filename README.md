@@ -124,7 +124,7 @@ python scripts/evaluate_boundaries.py --output output/edges.json
 - 检索没有调用图。
 - 逐字引用校验只能证明引用存在，不能证明结论正确。
 - 单用户、单 worker，不支持多人权限。
-- 客服模块目前只接受代码里指定的模型网关和两种已验证的模型（见 `devrag/support/model.py`）。
+- 客服模块只接受代码里写明并实测过的接入方式（见 `devrag/support/model.py`）：ciyuan 网关的两种模型（`SUPPORT_API_KEY`），或 DeepSeek 官方接口的 `deepseek-flash` / `deepseek-v4-pro`（只设 `SUPPORT_DEEPSEEK_API_KEY`，不能与 `SUPPORT_API_KEY`、`SUPPORT_BASE_URL` 同时设置；也不要在 `.env` 里写 `SUPPORT_*_MODEL`，旧版本不认这些模型名，回滚后会启动失败）。
 
 ## 文档索引
 
