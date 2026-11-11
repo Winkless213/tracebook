@@ -5,7 +5,10 @@
 #
 # pull ghcr.io/winkless213/tracebook:<commit> -> online SQLite backup -> switch -> wait until /health
 # reports <commit>; otherwise switch back to the previous release and exit non-zero.
+# Summary lines go to releases.log and back to CI; command output and container logs stay in deploy.log.
 set -euo pipefail
+# If the CI end goes away mid-deploy, keep going (and roll back if needed) instead of dying on a write.
+trap '' PIPE
 
 app_dir=/opt/tracebook
 image=ghcr.io/winkless213/tracebook
@@ -16,12 +19,30 @@ if [[ ${action:-} != deploy || ! ${release:-} =~ ^[0-9a-f]{40}$ || -n ${extra:-}
   echo 'usage: deploy <40-hex commit>' >&2
   exit 2
 fi
+# compose.yaml needs APP_RELEASE for every command (ps, exec, logs), not only for up.
+export APP_RELEASE=$release
 
 cd "$app_dir"
 exec 9>deploy.lock
 flock -n 9 || { echo 'another deploy is running' >&2; exit 75; }
 
-log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a releases.log >&2; }
+token=
+IFS= read -r -t 5 token || true
+exec </dev/null 3>&2 >>deploy.log 2>&1
+echo "=== $(date -u +%FT%TZ) deploy $release"
+
+log() {
+  local line
+  line="$(date -u +%FT%TZ) $*"
+  echo "$line" >>releases.log
+  echo "$line" >&3 || true
+}
+# shellcheck disable=SC2329  # called by the EXIT trap
+on_exit() {
+  local code=$?
+  ((code == 0)) || log "exit $code; details in $app_dir/deploy.log"
+}
+trap on_exit EXIT
 
 switch_to() {
   APP_RELEASE=$1 docker compose up -d --no-build --wait --wait-timeout 180 app
@@ -36,8 +57,6 @@ reports() {
 }
 
 if ! docker image inspect "$image:$release" >/dev/null 2>&1; then
-  token=
-  IFS= read -r -t 5 token || true
   [[ -z $token ]] || printf '%s' "$token" | docker login ghcr.io -u ci --password-stdin >/dev/null
   pulled=0
   docker pull -q "$image:$release" >/dev/null && pulled=1
@@ -47,9 +66,11 @@ if ! docker image inspect "$image:$release" >/dev/null 2>&1; then
     exit 1
   fi
 fi
+unset token
 
 previous=$(cat current-release 2>/dev/null || true)
-if [[ -n $(docker compose ps --status running -q app) ]]; then
+running=$(docker compose ps --status running -q app)
+if [[ -n $running ]]; then
   backup=/data/backups/before-${release:0:12}-$(date -u +%Y%m%dT%H%M%SZ).sqlite
   docker compose exec -T app python scripts/backup.py /data/knowledge.sqlite "$backup" >/dev/null
   docker compose exec -T app sh -c 'ls -1t /data/backups/before-*.sqlite | tail -n +11 | xargs -r rm -f --'
@@ -64,7 +85,7 @@ if switch_to "$release" && reports "$release"; then
 fi
 
 log "failed $release"
-docker compose logs --tail 40 app >&2 || true
+docker compose logs --tail 40 app || true
 if [[ -n $previous ]] && switch_to "$previous" && reports "$previous"; then
   log "rolled back to $previous"
 else

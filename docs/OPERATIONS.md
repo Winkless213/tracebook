@@ -7,11 +7,11 @@
 `main` 上 CI 通过后调用 `.github/workflows/deploy.yml`：
 
 1. `image` 任务构建镜像 `ghcr.io/winkless213/tracebook:<commit>`（`APP_RELEASE` 即该提交），推到 GHCR。
-2. `deploy` 任务使用 GitHub 环境 `production`（只允许 `main`），用部署密钥 SSH 到 VPS，执行 `deploy <commit>`，并通过标准输入传一个只读令牌，用于拉取镜像。
-3. 服务器上的 `deploy/tracebook-deploy`：拉镜像 → 运行中的库在线备份到 `/data/backups/before-*.sqlite`（保留最新 10 份）→ `docker compose up --wait` 切到新版本 → 等 `/health` 报出新提交；不成功就切回上一版并返回失败。
+2. `deploy` 任务使用 GitHub 环境 `production`（只允许 `main`）。先确认该提交在 `main` 上；由 CI 触发时，它还必须是 `main` 的最新提交，否则跳过，由更新那次提交的运行负责部署。确认后用部署密钥 SSH 到 VPS，执行 `deploy <commit>`，并通过标准输入传一个只读令牌，用于拉取镜像。
+3. 服务器上的 `deploy/tracebook-deploy`：拉镜像 → 主库 `knowledge.sqlite` 在线备份到 `/data/backups/before-*.sqlite`（保留最新 10 份；客服的 `support.sqlite`、`checkpoints.sqlite` 不在内）→ `docker compose up --wait` 切到新版本 → 等 `/health` 报出新提交；不成功就切回上一版并返回失败。Actions 中途取消或断线时，服务器上的部署照常走完（成功或回滚），结果看 `releases.log`。
 4. Actions 再从公网核对 `https://tracebook.sxsdas.cloud/health` 的 release。
 
-手动回滚或重新部署：在 Actions 里对 `main` 运行 Deploy，填入提交 SHA（该镜像须已在 GHCR）。容器回滚不撤销表结构变化，当前只追加表结构；需要撤销数据时按下文从备份恢复。
+手动回滚或重新部署：在 Actions 里对 `main` 运行 Deploy，填入提交 SHA（必须是 `main` 上的提交，镜像须已在 GHCR）。容器回滚不撤销表结构变化，当前只追加表结构；需要撤销主库数据时按下文从备份恢复。
 
 服务器一次性准备（VPS 2，2026-11-11）：
 
@@ -21,7 +21,7 @@
   - `TRACEBOOK_IMAGE=ghcr.io/winkless213/tracebook`。
   - `FORWARDED_ALLOW_IPS=*`：端口只绑 127.0.0.1，只有本机的 Caddy 能访问；uvicorn 据此识别 HTTPS，给会话 cookie 加 Secure。
   - 应用变量。
-- 部署记录：`/opt/tracebook/releases.log` 和 `current-release`。
+- 部署记录在 `/opt/tracebook/`：`releases.log` 是每次部署的摘要，CI 日志里也只出现这些行；`deploy.log` 存命令输出和失败时的容器日志，只留在服务器上；`current-release` 是当前版本。
 - Caddy：`tracebook.sxsdas.cloud` 反代到 `127.0.0.1:8083`。
 - GitHub 环境 `production` 配置：
   - secrets：`DEPLOY_SSH_KEY`（私钥只存在这里）、`DEPLOY_KNOWN_HOSTS`（服务器主机公钥，避免首次连接被冒充）。
